@@ -1,4 +1,4 @@
-name: Bosch USB Android APK
+name: Bosch BES2 Android APK
 on:
   push:
     branches: [bosch-usb-tablet]
@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 jobs:
-  android:
+  test-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,25 +14,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Protocol self-tests
+        run: |
+          mkdir -p /tmp/bosch-tests
+          javac -d /tmp/bosch-tests app/src/main/java/online/wixed/boschusb/Protocol.java tests/ProtocolSelfTest.java
+          java -cp /tmp/bosch-tests online.wixed.boschusb.ProtocolSelfTest
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Build APK using preinstalled Android SDK 35
+      - name: Build Android APK
         run: gradle assembleDebug --no-daemon --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: Bosch-USB-Lab-debug-apk
+          name: Bosch-BES2-Diagnostic-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-      - name: Upload to Catbox
-        continue-on-error: true
-        run: |
-          RESULT=$(curl --fail --silent --show-error --retry 2 --max-time 120 -F "reqtype=fileupload" -F "fileToUpload=@app/build/outputs/apk/debug/app-debug.apk" https://catbox.moe/user/api.php || true)
-          case "$RESULT" in
-            https://files.catbox.moe/*)
-              echo "APK URL: $RESULT"
-              echo "## APK" >> "$GITHUB_STEP_SUMMARY"
-              echo "$RESULT" >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            *) echo "Catbox upload unavailable: $RESULT" ;;
-          esac

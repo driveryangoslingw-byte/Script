@@ -1,156 +1,316 @@
 package online.wixed.boschusb;
-import android.app.*;
-import android.os.*;
-import android.content.*;
+
+import android.app.Activity;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.hardware.usb.*;
-import android.view.*;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.view.View;
+import android.view.ViewGroup;
 import android.widget.*;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.io.*;
+import java.util.concurrent.*;
+import org.json.*;
+
+/** Explicit read-only diagnostic transport for Bosch BES2 HID 108C:0155. */
 public final class MainActivity extends Activity {
- private static final int VID=0x108c,PID=0x0155,N=64;
- private static final String PERMISSION="online.wixed.boschusb.permission.USB";
- private UsbManager manager;
- private UsbDevice device;
- private UsbDeviceConnection connection;
- private UsbInterface iface;
- private UsbEndpoint in,out;
- private TextView log;
- private final Handler ui=new Handler(Looper.getMainLooper());
- private final java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();
- private volatile boolean running=false;
- private final BroadcastReceiver receiver=new BroadcastReceiver(){
-  @Override public void onReceive(Context c,Intent i){
-   if(!PERMISSION.equals(i.getAction()))return;
-   UsbDevice received;
-   if(Build.VERSION.SDK_INT>=33)
-    received=i.getParcelableExtra(UsbManager.EXTRA_DEVICE,UsbDevice.class);
-   else
-    received=(UsbDevice)i.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-   if(received!=null&&(received.getVendorId()!=VID||received.getProductId()!=PID)){
-    say("USB permission response ignored: another device");return;
-   }
-   boolean granted=i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false);
-   boolean actual=device!=null&&manager.hasPermission(device);
-   say("USB permission: callback="+granted+", actual="+actual);
-   if(actual)worker.execute(()->open());
-   else say("Permission unavailable; reconnect USB and select Allow.");
-  }
- };
- @Override public void onCreate(Bundle state){
-  super.onCreate(state);
-  manager=(UsbManager)getSystemService(USB_SERVICE);
-  LinearLayout root=new LinearLayout(this);
-  root.setOrientation(LinearLayout.VERTICAL);root.setPadding(18,18,18,18);root.setBackgroundColor(0xff0b1424);
-  TextView title=new TextView(this);title.setText("BOSCH USB LAB  •  108C:0155");title.setTextSize(23);title.setTextColor(0xff69c9ff);root.addView(title);
-  button(root,"1. Find Bosch / Connect",()->scan());
-  button(root,"2. USB handshake (read only)",()->worker.execute(()->probe()));
-  button(root,"3. Read firmware DID 0220",()->worker.execute(()->readDid()));
-  button(root,"4. Test published Bosch BMS read F130 (READ ONLY)",()->worker.execute(()->readBatteryPartNumber()));
-  TextView status=new TextView(this);status.setText("ASSIST SPEED LIMIT: unverified; motor limit cannot be changed by this diagnostic reader.");status.setTextColor(0xffffc672);status.setTextSize(13);status.setPadding(4,8,4,8);root.addView(status);
-  button(root,"5. Copy log",()->{
-   ((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Bosch log",log.getText()));
-   Toast.makeText(this,"Log copied",Toast.LENGTH_SHORT).show();
-  });
-  ScrollView sv=new ScrollView(this);log=new TextView(this);log.setTextColor(0xffd1e3f3);log.setTextSize(14);log.setTextIsSelectable(true);log.setPadding(8,14,8,14);
-  sv.addView(log);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);
-  IntentFilter f=new IntentFilter(PERMISSION);
-  if(Build.VERSION.SDK_INT>=33)registerReceiver(receiver,f,Context.RECEIVER_EXPORTED);else registerReceiver(receiver,f);
-  say("Connect the display using a USB data cable. This build is diagnostic only and cannot rewrite firmware/settings.");
- }
- private void button(LinearLayout root,String name,Runnable cb){
-  Button b=new Button(this);b.setText(name);b.setOnClickListener(v->cb.run());root.addView(b,new LinearLayout.LayoutParams(-1,-2));
- }
- private void say(String s){ui.post(()->{if(log!=null)log.append(s+"\n");});}
- private String hex(byte[] b,int n){
-  StringBuilder s=new StringBuilder();for(int j=0;j<n;j++)s.append(String.format(java.util.Locale.US,"%02X ",b[j]&255));return s.toString();
- }
- private void scan(){
-  device=null;for(UsbDevice d:manager.getDeviceList().values())if(d.getVendorId()==VID&&d.getProductId()==PID){device=d;break;}
-  if(device==null){say("Bosch 108C:0155 not found. Check USB OTG/host mode.");return;}
-  say("Found: "+device.getDeviceName());
-  if(manager.hasPermission(device)){worker.execute(()->open());return;}
-  Intent i=new Intent(PERMISSION).setPackage(getPackageName());
-  int flags=PendingIntent.FLAG_UPDATE_CURRENT;
-  if(Build.VERSION.SDK_INT>=31)flags|=PendingIntent.FLAG_MUTABLE;
-  PendingIntent p=PendingIntent.getBroadcast(this,0,i,flags);
-  manager.requestPermission(device,p);
- }
- private synchronized void open(){
-  try{
-   close();
-   if(device==null||!manager.hasPermission(device)){say("No USB permission");return;}
-   connection=manager.openDevice(device);if(connection==null)throw new Exception("openDevice failed");
-   for(int i=0;i<device.getInterfaceCount();i++){
-    UsbInterface f=device.getInterface(i);UsbEndpoint rx=null,tx=null;
-    for(int j=0;j<f.getEndpointCount();j++){
-     UsbEndpoint e=f.getEndpoint(j);
-     if(e.getType()==UsbConstants.USB_ENDPOINT_XFER_INT){
-      if(e.getDirection()==UsbConstants.USB_DIR_IN)rx=e;
-      else if(e.getDirection()==UsbConstants.USB_DIR_OUT)tx=e;
-     }
+  private static final String USB_ACTION="online.wixed.boschdiag.USB_PERMISSION";
+  private static final int EXPORT_REQUEST=318;
+  private final Handler ui=new Handler(Looper.getMainLooper());
+  private final ExecutorService worker=Executors.newSingleThreadExecutor();
+  private final StringBuilder log=new StringBuilder();
+  private final ArrayList<JSONObject> packetLog=new ArrayList<>();
+  private final ArrayList<JSONObject> values=new ArrayList<>();
+  private UsbManager manager;
+  private volatile UsbDevice device;
+  private UsbDeviceConnection conn;
+  private UsbInterface iface;
+  private UsbEndpoint in,out;
+  private TextView stateText, progressText, traceText, resultText;
+  private CheckBox initialCheck;
+  private Spinner profileSpinner;
+  private volatile boolean busy=false, cancel=false;
+  private String exportData="";
+  private int count=0;
+  private final BroadcastReceiver usbReceiver=new BroadcastReceiver(){
+    @Override public void onReceive(Context context,Intent intent){
+      String action=intent.getAction();
+      if(USB_ACTION.equals(action)){
+        UsbDevice d=deviceFrom(intent);
+        boolean callback=intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false);
+        boolean real=device!=null&&manager.hasPermission(device);
+        post("USB permission callback="+callback+", actual="+real);
+        if(d!=null && (d.getVendorId()!=Protocol.VID||d.getProductId()!=Protocol.PID))return;
+        if(real)worker.execute(()->open(device));
+        else updateState("USB access denied. Select Allow on Android USB dialog.",false);
+      }else if(UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)){
+        UsbDevice d=deviceFrom(intent);
+        if(d!=null&&d.getVendorId()==Protocol.VID&&d.getProductId()==Protocol.PID){
+          cancel=true;
+          updateState("Bosch USB disconnected",false);
+          worker.execute(()->closeConnection());
+        }
+      }
     }
-    if(rx!=null&&connection.claimInterface(f,true)){iface=f;in=rx;out=tx;say("HID opened, interface "+i);return;}
-   }
-   throw new Exception("No supported interrupt IN endpoint");
-  }catch(Exception e){say("Open error: "+e.getMessage());close();}
- }
- private void close(){if(connection!=null){try{if(iface!=null)connection.releaseInterface(iface);}catch(Exception ignored){}connection.close();}connection=null;iface=null;in=null;out=null;}
- private byte[] exchange(byte[] send)throws Exception{
-  if(connection==null||in==null||iface==null)throw new Exception("Connect first");
-  say("OUT "+hex(send,N));
-  int n=out!=null?connection.bulkTransfer(out,send,N,1400):connection.controlTransfer(0x21,9,0x0200,iface.getId(),send,N,1400);
-  if(n!=N)throw new Exception("USB OUT failed "+n);
-  byte[] recv=new byte[N];int len=connection.bulkTransfer(in,recv,N,1600);
-  if(len<=0)throw new Exception("No USB response: "+len);
-  say("IN  "+hex(recv,len));
-  if(len>1&&recv[0]==0&&(recv[1]&255)==255)throw new Exception("Bosch returned 00 FF (transport/session rejection)");
-  return java.util.Arrays.copyOf(recv,len);
- }
- private void probe(){
-  if(running)return;running=true;
-  try{
-   byte[] q=new byte[N];q[2]=3;q[3]=3;q[4]=2;q[5]=1;
-   byte[] ans=exchange(q);
-   if(ans.length<3||ans[0]!=0||ans[1]!=1||ans[2]!=2)throw new Exception("Unexpected handshake");
-   say("Handshake OK: sliding window A");
-  }catch(Exception e){say("Handshake error: "+e.getMessage());}
-  finally{running=false;}
- }
- private void readDid(){
-  if(running)return;running=true;
-  try{
-   byte[] q=new byte[N];q[2]=3;q[3]=3;q[4]=2;q[5]=1;
-   byte[] h=exchange(q);
-   if(h.length<3||h[0]!=0||h[1]!=1||h[2]!=2)throw new Exception("Handshake not accepted");
-   byte[] d=new byte[N];
-   int[] p={2,0,7,0,255,255,11,0,0,0,0x3A,4,3,0x22,2,0x20};
-   for(int i=0;i<p.length;i++)d[i]=(byte)p[i];
-   byte[] a=exchange(d);
-   boolean found=false;
-   for(int i=0;i<a.length-3;i++)if((a[i]&255)==0x62&&(a[i+1]&255)==2&&(a[i+2]&255)==0x20){say("Firmware DID 0220: "+hex(java.util.Arrays.copyOfRange(a,i+3,a.length),a.length-i-3));found=true;break;}
-   if(!found)say("No confirmed UDS reply 62 02 20; do not interpret as settings.");
-  }catch(Exception e){say("Read error: "+e.getMessage());}finally{running=false;}
- }
- private void readBatteryPartNumber(){
-  if(running){say("Busy");return;}running=true;
-  try{
-   say("Testing publicly documented read-only Bosch frame: CID 3C, DID F130. No changes will be written.");
-   byte[] hs=new byte[N];hs[2]=3;hs[3]=3;hs[4]=2;hs[5]=1;
-   byte[] h=exchange(hs);
-   if(h.length<3||h[0]!=0||h[1]!=1||h[2]!=2)throw new Exception("Handshake not accepted");
-   byte[] q=new byte[N];
-   int[] data={2,0,7,0,255,255,11,0,0,0,0x3C,4,3,0x22,0xF1,0x30};
-   for(int i=0;i<data.length;i++)q[i]=(byte)data[i];
-   byte[] a=exchange(q);
-   boolean confirmed=false;
-   for(int i=0;i<a.length-2;i++)if((a[i]&255)==0x62&&(a[i+1]&255)==0xF1&&(a[i+2]&255)==0x30){
-    say("Confirmed reply 62 F1 30, raw: "+hex(java.util.Arrays.copyOfRange(a,i+3,a.length),a.length-i-3));
-    confirmed=true;break;
-   }
-   if(!confirmed)say("No confirmed reply 62 F1 30. Raw response above; cannot decode.");
-  }catch(Exception e){say("Published read test failed: "+e.getMessage());}
-  finally{running=false;}
- }
- @Override public void onDestroy(){try{unregisterReceiver(receiver);}catch(Exception ignored){} worker.execute(this::close);worker.shutdown();super.onDestroy();}
+  };
+  private UsbDevice deviceFrom(Intent i){
+    if(Build.VERSION.SDK_INT>=33)return i.getParcelableExtra(UsbManager.EXTRA_DEVICE,UsbDevice.class);
+    return (UsbDevice)i.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+  }
+  @Override public void onCreate(Bundle state){
+    super.onCreate(state);
+    manager=(UsbManager)getSystemService(USB_SERVICE);
+    IntentFilter f=new IntentFilter(USB_ACTION);
+    f.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
+    if(Build.VERSION.SDK_INT>=33)registerReceiver(usbReceiver,f,Context.RECEIVER_EXPORTED);
+    else registerReceiver(usbReceiver,f);
+    buildUI();
+    post("BES2 read-only diagnostic build. USB 108C:0155.");
+    post("This is not a speed-unlock tool; device-specific read responses remain unverified.");
+  }
+  private TextView text(String message,int size,int color){
+    TextView v=new TextView(this);v.setText(message);v.setTextColor(color);
+    v.setTextSize(size);v.setPadding(7,10,7,10);return v;
+  }
+  private void add(LinearLayout l,View v){l.addView(v,new LinearLayout.LayoutParams(-1,-2));}
+  private void button(LinearLayout l,String name,Runnable action){
+    Button b=new Button(this);b.setAllCaps(false);b.setText(name);b.setTextColor(0xff142332);
+    b.setOnClickListener(v->action.run());add(l,b);
+  }
+  private void buildUI(){
+    ScrollView scroll=new ScrollView(this);
+    LinearLayout root=new LinearLayout(this);
+    root.setOrientation(LinearLayout.VERTICAL);
+    root.setBackgroundColor(0xff0b1424);
+    root.setPadding(22,18,22,38);
+    scroll.addView(root);
+    TextView head=text("BOSCH BES2  •  DIAGNOSTICS",22,0xff87dcff);
+    head.setTypeface(null,Typeface.BOLD);add(root,head);
+    add(root,text("Intuvia / E-Bike HMI 108C:0155 | FREE · OFFLINE",13,0xffacc0d8));
+    stateText=text("Not connected",17,0xffffffc878);add(root,stateText);
+    button(root,"1 · Find Bosch / Connect",this::connect);
+    button(root,"2 · Check USB handshake",()->runProbe());
+    add(root,text("DIAGNOSTIC PROFILE (select the component / channel)",14,0xff87dcff));
+    profileSpinner=new Spinner(this);
+    ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,Protocol.PROFILES);
+    adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+    profileSpinner.setAdapter(adapter);
+    profileSpinner.setBackgroundColor(0xffc8d7ec);
+    add(root,profileSpinner);
+    initialCheck=new CheckBox(this);initialCheck.setText("Send optional initial empty frame");
+    initialCheck.setTextColor(0xffe4efff);initialCheck.setChecked(false);add(root,initialCheck);
+    add(root,text("Published BUI CIDs 39, 3A, 5D are research candidates. Motor/BMS CIDs 3B/3C are LEGACY and may not work on your firmware.",12,0xffffd08b));
+    button(root,"3 · Read first DID (safe protocol probe)",()->readData(false));
+    button(root,"4 · Read profile DIDs (stops on transport error)",()->readData(true));
+    button(root,"Stop requests",()->{cancel=true;post("Stop requested.");});
+    progressText=text("Read: 0 confirmed",14,0xffc9ddf6);add(root,progressText);
+    resultText=text("Results appear here",13,0xffd5f5cd);
+    resultText.setTextIsSelectable(true);add(root,resultText);
+    button(root,"Save full diagnostic JSON",this::saveReport);
+    button(root,"Copy report to clipboard",this::copyReport);
+    button(root,"Clear screen / results",this::clearScreen);
+    add(root,text("RAW USB TRACE (contains serials and device IDs; review before sharing)",12,0xffffd08b));
+    traceText=text("",12,0xffa9c7ea);traceText.setTypeface(Typeface.MONOSPACE);
+    traceText.setTextIsSelectable(true);add(root,traceText);
+    add(root,text("Read-only: only USB handshake and UDS ReadDataByIdentifier (0x22). No writes, resets, firmware update or speed-limit edits.",12,0xffa6b9cf));
+    setContentView(scroll);
+  }
+  private void post(String message){
+    synchronized(log){log.append(new Date()).append("  ").append(message).append('\n');}
+    ui.post(()->{
+      if(traceText!=null){
+        String s; synchronized(log){s=log.toString();}
+        traceText.setText(s.length()>27000?s.substring(s.length()-27000):s);
+      }
+    });
+  }
+  private void updateState(String s,boolean ok){ui.post(()->{
+    if(stateText!=null){stateText.setText(s);stateText.setTextColor(ok?0xffaaffaa:0xffffc47e);}
+  });post(s);}
+  private void connect(){
+    if(busy){post("Busy");return;}
+    UsbDevice selected=null;
+    for(UsbDevice d:manager.getDeviceList().values()){
+      if(d.getVendorId()==Protocol.VID&&d.getProductId()==Protocol.PID){selected=d;break;}
+    }
+    if(selected==null){updateState("Bosch 108C:0155 not found. Check USB OTG and cable.",false);return;}
+    device=selected;post("Detected USB device "+device.getDeviceName()+" with "+device.getInterfaceCount()+" interface(s).");
+    if(manager.hasPermission(device)){worker.execute(()->open(device));return;}
+    Intent intent=new Intent(USB_ACTION).setPackage(getPackageName());
+    int flags=PendingIntent.FLAG_UPDATE_CURRENT;
+    if(Build.VERSION.SDK_INT>=31)flags|=PendingIntent.FLAG_MUTABLE;
+    PendingIntent pending=PendingIntent.getBroadcast(this,0,intent,flags);
+    manager.requestPermission(device,pending);
+    updateState("Accept the Android USB permission prompt",false);
+  }
+  private synchronized void open(UsbDevice target){
+    if(busy)return;
+    closeConnection();
+    try{
+      if(target==null||!manager.hasPermission(target))throw new Exception("USB permission unavailable");
+      for(int i=0;i<target.getInterfaceCount();i++){
+        UsbInterface f=target.getInterface(i);
+        UsbEndpoint read=null,write=null;
+        for(int j=0;j<f.getEndpointCount();j++){
+          UsbEndpoint ep=f.getEndpoint(j);
+          if(ep.getType()!=UsbConstants.USB_ENDPOINT_XFER_INT)continue;
+          if(ep.getDirection()==UsbConstants.USB_DIR_IN)read=ep;
+          else if(ep.getDirection()==UsbConstants.USB_DIR_OUT)write=ep;
+        }
+        if(read==null)continue;
+        UsbDeviceConnection c=manager.openDevice(target);
+        if(c==null)throw new Exception("openDevice failed");
+        if(!c.claimInterface(f,true)){c.close();continue;}
+        conn=c;iface=f;in=read;out=write;device=target;
+        updateState("Bosch HID connected. IN ep="+read.getAddress()+", OUT="+(write==null?"HID control":write.getAddress()),true);
+        return;
+      }
+      throw new Exception("No interrupt IN endpoint found");
+    }catch(Exception e){updateState("Open failed: "+e.getMessage(),false);closeConnection();}
+  }
+  private synchronized void closeConnection(){
+    if(conn!=null){
+      try{if(iface!=null)conn.releaseInterface(iface);}catch(Exception ignored){}
+      try{conn.close();}catch(Exception ignored){}
+    }
+    conn=null;iface=null;in=null;out=null;
+  }
+  private void record(String direction,byte[] bytes,String detail){
+    final String h=Protocol.hex(bytes);
+    post(direction+" "+detail+"\n"+h);
+    JSONObject row=new JSONObject();
+    try{row.put("direction",direction);row.put("detail",detail);row.put("hex",h);}catch(Exception ignored){}
+    synchronized(packetLog){packetLog.add(row);}
+  }
+  private byte[] exchange(byte[] bytes,String label)throws Exception{
+    if(conn==null||in==null||iface==null)throw new Exception("USB not connected");
+    if(cancel)throw new Exception("Stopped by user");
+    record("OUT",bytes,label);
+    int sent=out!=null
+      ?conn.bulkTransfer(out,bytes,Protocol.LEN,1600)
+      :conn.controlTransfer(0x21,0x09,0x0200,iface.getId(),bytes,Protocol.LEN,1600);
+    if(sent!=Protocol.LEN)throw new Exception("USB OUT failed: "+sent);
+    byte[] receive=new byte[Protocol.LEN];
+    int n=conn.bulkTransfer(in,receive,Protocol.LEN,1900);
+    if(n<=0)throw new Exception("USB timeout / IN error: "+n);
+    byte[] reply=Arrays.copyOf(receive,n);record("IN",reply,label);
+    return reply;
+  }
+  private void startJob(Runnable op){
+    if(busy){post("Another diagnostic operation is running");return;}
+    busy=true;cancel=false;worker.execute(()->{
+      try{op.run();}finally{busy=false;}
+    });
+  }
+  private void runProbe(){startJob(()->{
+    try{
+      byte[] r=exchange(Protocol.handshake(),"Bosch handshake");
+      String code=Protocol.summary(r,0);
+      if(!code.equals("HANDSHAKE_SLIDING_WINDOW_A"))throw new Exception("Unexpected handshake: "+code);
+      updateState("USB handshake confirmed: sliding window A",true);
+    }catch(Exception e){updateState("Handshake error: "+e.getMessage(),false);}
+  });}
+  private void readData(boolean all){
+    final int profile=profileSpinner.getSelectedItemPosition();
+    final boolean empty=initialCheck.isChecked();
+    startJob(()->{
+      try{
+        byte[] h=exchange(Protocol.handshake(),"Handshake before diagnostics");
+        if(!Protocol.summary(h,0).equals("HANDSHAKE_SLIDING_WINDOW_A"))
+          throw new Exception("Handshake rejected: "+Protocol.summary(h,0));
+        int seq=0;
+        if(empty){
+          byte[] a=exchange(Protocol.initial(seq++),"Optional empty initial frame");
+          String result=Protocol.summary(a,0);
+          post("Initial-frame reply: "+result);
+          if(result.equals("TRANSPORT_REJECTED_00_FF"))throw new Exception("00 FF on initial empty frame; try unchecked.");
+        }
+        int cid=Protocol.cid(profile),n=0;int[] ids=Protocol.dids(profile);
+        post("Target: "+Protocol.PROFILES[profile]);
+        for(int did:ids){
+          if(cancel)break;
+          byte[] r=exchange(Protocol.read(cid,did,seq++),"Read DID "+Protocol.didHex(did)+" / CID "+String.format(Locale.US,"%02X",cid));
+          String code=Protocol.summary(r,did);
+          JSONObject result=new JSONObject();
+          result.put("profile",Protocol.PROFILES[profile]);
+          result.put("cid",String.format(Locale.US,"%02X",cid));
+          result.put("did",Protocol.didHex(did));
+          result.put("label",Protocol.label(did));
+          result.put("response",code);
+          result.put("raw",did==0x0242?"redacted in results (see raw trace)":Protocol.hex(r));
+          synchronized(values){values.add(result);}
+          n++;
+          final String row=Protocol.didHex(did)+"  "+Protocol.label(did)+"  → "+code+"\n";
+          ui.post(()->{
+            resultText.append(row);
+            progressText.setText("Tested: "+values.size()+"  •  latest CID: "+String.format(Locale.US,"%02X",cid));
+          });
+          if(code.equals("TRANSPORT_REJECTED_00_FF")){
+            throw new Exception("00 FF: transport/session rejects this query. DID="+Protocol.didHex(did)+", CID="+String.format(Locale.US,"%02X",cid)+". This is NOT a valid setting value.");
+          }
+          if(!all)break;
+        }
+        updateState((cancel?"Stopped":"Read attempt complete")+" (not all raw replies may be decodable)",!cancel);
+      }catch(Exception e){updateState("Diagnostics stopped: "+e.getMessage(),false);}
+    });
+  }
+  private void clearScreen(){
+    if(busy){post("Stop diagnostics first");return;}
+    synchronized(packetLog){packetLog.clear();}
+    synchronized(values){values.clear();}
+    synchronized(log){log.setLength(0);}
+    ui.post(()->{traceText.setText("");resultText.setText("");progressText.setText("Read: 0 confirmed");});
+  }
+  private String buildReport(){
+    JSONObject root=new JSONObject();
+    try{
+      root.put("app","Bosch BES2 Diagnostic Lab 2.0 (experimental read only)");
+      root.put("usb_vid_pid","108C:0155");
+      root.put("hardware_validated",false);
+      root.put("note","The JSON trace may include device serial numbers. Do not publish unredacted logs.");
+      synchronized(values){root.put("results",new JSONArray(values));}
+      synchronized(packetLog){root.put("trace",new JSONArray(packetLog));}
+      synchronized(log){root.put("text_log",log.toString());}
+      return root.toString(2);
+    }catch(Exception e){return "{\"error\":\"report generation failed\"}";}
+  }
+  private void copyReport(){
+    ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Bosch diagnostics",buildReport()));
+    Toast.makeText(this,"Report copied",Toast.LENGTH_SHORT).show();
+  }
+  private void saveReport(){
+    exportData=buildReport();
+    Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+    i.addCategory(Intent.CATEGORY_OPENABLE);
+    i.setType("application/json");
+    i.putExtra(Intent.EXTRA_TITLE,"bosch-bes2-diagnostics.json");
+    startActivityForResult(i,EXPORT_REQUEST);
+  }
+  @Override protected void onActivityResult(int request,int result,Intent data){
+    super.onActivityResult(request,result,data);
+    if(request==EXPORT_REQUEST&&result==RESULT_OK&&data!=null&&data.getData()!=null){
+      try(OutputStream output=getContentResolver().openOutputStream(data.getData())){
+        if(output==null)throw new Exception("Unable to open output file");
+        output.write(exportData.getBytes(StandardCharsets.UTF_8));post("Diagnostic JSON saved.");
+      }catch(Exception e){post("Report save failed: "+e.getMessage());}
+    }
+  }
+  @Override protected void onDestroy(){
+    cancel=true;
+    try{unregisterReceiver(usbReceiver);}catch(Exception ignored){}
+    worker.execute(this::closeConnection);worker.shutdown();
+    super.onDestroy();
+  }
 }
