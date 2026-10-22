@@ -14,9 +14,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: Install SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Locate Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
@@ -28,10 +31,8 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
       - name: Upload to Catbox
-        id: catbox
         continue-on-error: true
         run: |
-          set -eu
           RESULT=$(curl --fail --silent --show-error --retry 2 --max-time 120 -F "reqtype=fileupload" -F "fileToUpload=@app/build/outputs/apk/debug/app-debug.apk" https://catbox.moe/user/api.php || true)
           case "$RESULT" in
             https://files.catbox.moe/*)
