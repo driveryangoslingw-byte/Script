@@ -99,7 +99,7 @@ public final class MainActivity extends Activity {
     TextView head=text("BOSCH BES2  •  DIAGNOSTICS",22,0xff87dcff);
     head.setTypeface(null,Typeface.BOLD);add(root,head);
     add(root,text("Intuvia / E-Bike HMI 108C:0155 | FREE · OFFLINE",13,0xffacc0d8));
-    stateText=text("Not connected",17,0xffffffc878);add(root,stateText);
+    stateText=text("Not connected",17,0xffffc878);add(root,stateText);
     button(root,"1 · Find Bosch / Connect",this::connect);
     button(root,"2 · Check USB handshake",()->runProbe());
     add(root,text("DIAGNOSTIC PROFILE (select the component / channel)",14,0xff87dcff));
