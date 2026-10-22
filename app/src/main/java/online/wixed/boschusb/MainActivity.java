@@ -21,10 +21,20 @@ public final class MainActivity extends Activity {
  private volatile boolean running=false;
  private final BroadcastReceiver receiver=new BroadcastReceiver(){
   @Override public void onReceive(Context c,Intent i){
-   if(PERMISSION.equals(i.getAction())) {
-    if(i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false)) worker.execute(()->open());
-    else say("USB permission denied");
+   if(!PERMISSION.equals(i.getAction()))return;
+   UsbDevice received;
+   if(Build.VERSION.SDK_INT>=33)
+    received=i.getParcelableExtra(UsbManager.EXTRA_DEVICE,UsbDevice.class);
+   else
+    received=(UsbDevice)i.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+   if(received!=null&&(received.getVendorId()!=VID||received.getProductId()!=PID)){
+    say("USB permission response ignored: another device");return;
    }
+   boolean granted=i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false);
+   boolean actual=device!=null&&manager.hasPermission(device);
+   say("USB permission: callback="+granted+", actual="+actual);
+   if(actual)worker.execute(()->open());
+   else say("Permission unavailable; reconnect USB and select Allow.");
   }
  };
  @Override public void onCreate(Bundle state){
@@ -36,6 +46,7 @@ public final class MainActivity extends Activity {
   button(root,"1. Find Bosch / Connect",()->scan());
   button(root,"2. USB handshake (read only)",()->worker.execute(()->probe()));
   button(root,"3. Read firmware DID 0220",()->worker.execute(()->readDid()));
+  TextView status=new TextView(this);status.setText("ASSIST SPEED LIMIT: not decoded. Bosch HMI is not the drive unit; no verified write protocol yet.");status.setTextColor(0xffffc672);status.setTextSize(13);status.setPadding(4,8,4,8);root.addView(status);
   button(root,"4. Copy log",()->{
    ((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Bosch log",log.getText()));
    Toast.makeText(this,"Log copied",Toast.LENGTH_SHORT).show();
@@ -43,7 +54,7 @@ public final class MainActivity extends Activity {
   ScrollView sv=new ScrollView(this);log=new TextView(this);log.setTextColor(0xffd1e3f3);log.setTextSize(14);log.setTextIsSelectable(true);log.setPadding(8,14,8,14);
   sv.addView(log);root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);
   IntentFilter f=new IntentFilter(PERMISSION);
-  if(Build.VERSION.SDK_INT>=33)registerReceiver(receiver,f,Context.RECEIVER_NOT_EXPORTED);else registerReceiver(receiver,f);
+  if(Build.VERSION.SDK_INT>=33)registerReceiver(receiver,f,Context.RECEIVER_EXPORTED);else registerReceiver(receiver,f);
   say("Connect the display using a USB data cable. This build is diagnostic only and cannot rewrite firmware/settings.");
  }
  private void button(LinearLayout root,String name,Runnable cb){
@@ -59,7 +70,9 @@ public final class MainActivity extends Activity {
   say("Found: "+device.getDeviceName());
   if(manager.hasPermission(device)){worker.execute(()->open());return;}
   Intent i=new Intent(PERMISSION).setPackage(getPackageName());
-  PendingIntent p=PendingIntent.getBroadcast(this,0,i,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
+  int flags=PendingIntent.FLAG_UPDATE_CURRENT;
+  if(Build.VERSION.SDK_INT>=31)flags|=PendingIntent.FLAG_MUTABLE;
+  PendingIntent p=PendingIntent.getBroadcast(this,0,i,flags);
   manager.requestPermission(device,p);
  }
  private synchronized void open(){
