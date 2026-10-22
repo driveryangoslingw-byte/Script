@@ -46,8 +46,9 @@ public final class MainActivity extends Activity {
   button(root,"1. Find Bosch / Connect",()->scan());
   button(root,"2. USB handshake (read only)",()->worker.execute(()->probe()));
   button(root,"3. Read firmware DID 0220",()->worker.execute(()->readDid()));
-  TextView status=new TextView(this);status.setText("ASSIST SPEED LIMIT: not decoded. Bosch HMI is not the drive unit; no verified write protocol yet.");status.setTextColor(0xffffc672);status.setTextSize(13);status.setPadding(4,8,4,8);root.addView(status);
-  button(root,"4. Copy log",()->{
+  button(root,"4. Test published Bosch BMS read F130 (READ ONLY)",()->worker.execute(()->readBatteryPartNumber()));
+  TextView status=new TextView(this);status.setText("ASSIST SPEED LIMIT: unverified; motor limit cannot be changed by this diagnostic reader.");status.setTextColor(0xffffc672);status.setTextSize(13);status.setPadding(4,8,4,8);root.addView(status);
+  button(root,"5. Copy log",()->{
    ((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Bosch log",log.getText()));
    Toast.makeText(this,"Log copied",Toast.LENGTH_SHORT).show();
   });
@@ -130,6 +131,26 @@ public final class MainActivity extends Activity {
    for(int i=0;i<a.length-3;i++)if((a[i]&255)==0x62&&(a[i+1]&255)==2&&(a[i+2]&255)==0x20){say("Firmware DID 0220: "+hex(java.util.Arrays.copyOfRange(a,i+3,a.length),a.length-i-3));found=true;break;}
    if(!found)say("No confirmed UDS reply 62 02 20; do not interpret as settings.");
   }catch(Exception e){say("Read error: "+e.getMessage());}finally{running=false;}
+ }
+ private void readBatteryPartNumber(){
+  if(running){say("Busy");return;}running=true;
+  try{
+   say("Testing publicly documented read-only Bosch frame: CID 3C, DID F130. No changes will be written.");
+   byte[] hs=new byte[N];hs[2]=3;hs[3]=3;hs[4]=2;hs[5]=1;
+   byte[] h=exchange(hs);
+   if(h.length<3||h[0]!=0||h[1]!=1||h[2]!=2)throw new Exception("Handshake not accepted");
+   byte[] q=new byte[N];
+   int[] data={2,0,7,0,255,255,11,0,0,0,0x3C,4,3,0x22,0xF1,0x30};
+   for(int i=0;i<data.length;i++)q[i]=(byte)data[i];
+   byte[] a=exchange(q);
+   boolean confirmed=false;
+   for(int i=0;i<a.length-2;i++)if((a[i]&255)==0x62&&(a[i+1]&255)==0xF1&&(a[i+2]&255)==0x30){
+    say("Confirmed reply 62 F1 30, raw: "+hex(java.util.Arrays.copyOfRange(a,i+3,a.length),a.length-i-3));
+    confirmed=true;break;
+   }
+   if(!confirmed)say("No confirmed reply 62 F1 30. Raw response above; cannot decode.");
+  }catch(Exception e){say("Published read test failed: "+e.getMessage());}
+  finally{running=false;}
  }
  @Override public void onDestroy(){try{unregisterReceiver(receiver);}catch(Exception ignored){} worker.execute(this::close);worker.shutdown();super.onDestroy();}
 }
