@@ -59,7 +59,7 @@ internal static class Program
                 Console.WriteLine($"OUTCOME={result.Outcome}; USB={result.UsbStatus}; HANDSHAKE={result.HandshakeStatus}; VERIFIED_ECU_VALUES={result.VerifiedEcuValues}");
                 Console.WriteLine("REPORT_FILE=" + result.ReportFile);
                 if (result.ReportSaveError != null) { Console.Error.WriteLine(result.ReportSaveError); return 4; }
-                return result.Outcome is "ENUMERATION_ONLY" or "BUI_SOFTWARE_VERSION_READ" or "BUI_ODOMETER_READ" ? 0 : result.Outcome == "CANCELLED" ? 130 : 3;
+                return result.Outcome is "ENUMERATION_ONLY" or "BUI_SOFTWARE_VERSION_READ" or "BUI_ODOMETER_READ" or "BUI_HARDWARE_VERSION_READ" ? 0 : result.Outcome == "CANCELLED" ? 130 : 3;
             }
             finally { Console.CancelKeyPress -= handler; }
         }
@@ -108,7 +108,7 @@ public sealed class DiagnosticWindow : Form
         levels.Text = "USB: не проверен     Handshake: не проверен     Сессия: не установлена     ECU: 0 значений";
         levels.Dock = DockStyle.Fill; levels.ForeColor = Color.LightSteelBlue;
         layout.Controls.Add(levels, 0, 2);
-        state.Text = "Готов. Выбери DID на вкладке «Исследование и сравнение». Для 0220 подтверждено чтение версии ПО, а для 0249 — общего пробега.";
+        state.Text = "Готов. Выбери DID на вкладке «Исследование и сравнение». Для 0220 подтверждено ПО, 0221 — версия оборудования, 0249 — общий пробег.";
         state.Dock = DockStyle.Fill; state.ForeColor = Color.Khaki;
         layout.Controls.Add(state, 0, 3);
         layout.Controls.Add(new Label { Text = "Intuvia 108C:0155 · один handshake и один запрос чтения · без изменения настроек\nПроверяется BUI. Диагностика мотора и аккумулятора пока не реализована.", Dock = DockStyle.Fill }, 0, 4);
@@ -177,6 +177,7 @@ public sealed class DiagnosticWindow : Form
             state.Text = result.Outcome switch {
                 "BUI_SOFTWARE_VERSION_READ" => "Успешно прочитана версия ПО Intuvia: " + string.Join(", ", result.Values.Select(value => value.Value)) + ". Отчёт сохранён.",
                 "BUI_ODOMETER_READ" => "Общий пробег Intuvia: " + string.Join(", ", result.Values.Select(value => value.Value)) + " (DID 0249, данные подтверждены сравнением с дисплеем). Отчёт сохранён.",
+                "BUI_HARDWARE_VERSION_READ" => "Версия оборудования Intuvia: " + string.Join(", ", result.Values.Select(value => value.Value)) + " (DID 0221, совпадает с образцом отчёта Bosch). Отчёт сохранён.",
                 "BUI_READ_CANDIDATE_UNVERIFIED" => "Получен ответ на DID " + result.ResearchDid + ": " +
                     string.Join(", ", result.CandidateValues.Select(v => v.RawDataHex)) +
                     ". Это только сырые данные; их назначение и единицы измерения НЕ подтверждены.",
