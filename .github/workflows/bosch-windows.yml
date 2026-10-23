@@ -1,0 +1,36 @@
+name: Bosch BES2 Windows EXE
+on:
+  push:
+    branches: [bosch-usb-tablet]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/bosch-windows.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Run BES2 protocol self-tests
+        run: dotnet run --project windows/BoschBES2.Tests/BoschBES2.Tests.csproj --configuration Release
+      - name: Publish single Windows x64 EXE
+        shell: pwsh
+        run: |
+          dotnet publish windows/BoschBES2Auto/BoschBES2Auto.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false --output windows-dist
+          if (!(Test-Path 'windows-dist/BoschBES2Auto.exe')) { throw 'Windows EXE not built' }
+          (Get-FileHash 'windows-dist/BoschBES2Auto.exe' -Algorithm SHA256).Hash | Set-Content 'windows-dist/SHA256.txt'
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bosch-BES2-Windows-EXE
+          path: |
+            windows-dist/BoschBES2Auto.exe
+            windows-dist/SHA256.txt
+          retention-days: 30
+          if-no-files-found: error
