@@ -77,7 +77,7 @@ public final class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33)registerReceiver(usbReceiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(usbReceiver,f);
     buildUI();
-    post("BES2 4.0 guided, read-only USB transport diagnostics.");
+    post("BES2 4.1: documented direct read + guided transport diagnostics.");
     post("This is not a speed-unlock tool; device-specific read responses remain unverified.");
   }
   private TextView text(String message,int size,int color){
@@ -96,7 +96,7 @@ public final class MainActivity extends Activity {
     root.setBackgroundColor(0xff0b1424);
     root.setPadding(22,18,22,38);
     scroll.addView(root);
-    TextView head=text("BOSCH BES2  •  TRANSPORT LAB 4.0",22,0xff87dcff);
+    TextView head=text("BOSCH BES2  •  TRANSPORT LAB 4.1",22,0xff87dcff);
     head.setTypeface(null,Typeface.BOLD);add(root,head);
     add(root,text("Intuvia / E-Bike HMI 108C:0155 | FREE · OFFLINE",13,0xffacc0d8));
     stateText=text("Not connected",17,0xffffc878);add(root,stateText);
@@ -112,10 +112,13 @@ public final class MainActivity extends Activity {
     initialCheck=new CheckBox(this);initialCheck.setText("Include first empty frame (published sequence)");
     initialCheck.setTextColor(0xffe4efff);initialCheck.setChecked(true);add(root,initialCheck);
     add(root,text("CID values are research candidates, not verified ECU addresses. The original Bosch heartbeat bytes are NOT publicly verified.",12,0xffffd08b));
-    button(root,"3 · Guided handshake / heartbeat / DID",this::guidedRead);
-    button(root,"4 · Passive USB receive (no CID traffic)",this::passiveListen);
+    button(root,"3 · DIRECT read / selected CID (no heartbeat)",()->directRead(false));
+    button(root,"4 · PUBLISHED BMS example (CID 3C, DID F130)",()->directRead(true));
+    button(root,"5 · Guided handshake / tester / DID",this::guidedRead);
+    button(root,"6 · Passive USB receive (no CID traffic)",this::passiveListen);
+    button(root,"7 · Inspect USB HID report descriptor (read-only)",this::inspectHid);
     
-    add(root,text("One CID only, handshake once, optional empty frame, one TesterPresent candidate (not verified original Bosch heartbeat), then one DID only after a framed positive response. Stops immediately on 00 FF. Passive mode sends no diagnostic commands.",12,0xffffd08b));
+    add(root,text("DIRECT sends handshake + exactly one ReadDataByIdentifier (0x22) frame, with sequence 0 and no mandatory TesterPresent. PUBLISHED replays the exact documented battery part-number request. Legacy CID 3C may be unavailable on modern bikes. GUIDED is the old experimental flow. All flows stop on 00 FF; passive sends no diagnostic commands.",12,0xffffd08b));
 
     button(root,"Stop requests",()->{cancel=true;post("Stop requested.");});
     progressText=text("Read: 0 confirmed",14,0xffc9ddf6);add(root,progressText);
@@ -127,7 +130,7 @@ public final class MainActivity extends Activity {
     add(root,text("RAW USB TRACE (contains serials and device IDs; review before sharing)",12,0xffffd08b));
     traceText=text("",12,0xffa9c7ea);traceText.setTypeface(Typeface.MONOSPACE);
     traceText.setTextIsSelectable(true);add(root,traceText);
-    add(root,text("Read-only: only USB handshake and UDS ReadDataByIdentifier (0x22). No writes, resets, firmware update or speed-limit edits.",12,0xffa6b9cf));
+    add(root,text("Read-only: USB handshake, UDS ReadDataByIdentifier (0x22), experimental TesterPresent (0x3E), and standard USB descriptor inspection. No configuration writes, resets, flash, or speed-limit edits.",12,0xffa6b9cf));
     setContentView(scroll);
   }
   private void post(String message){
@@ -178,6 +181,9 @@ public final class MainActivity extends Activity {
         if(!c.claimInterface(f,true)){c.close();continue;}
         conn=c;iface=f;in=read;out=write;device=target;
         updateState("Bosch HID connected. IN ep="+read.getAddress()+", OUT="+(write==null?"HID control":write.getAddress()),true);
+        post("USB interface="+f.getId()+" class="+f.getInterfaceClass()+" subclass="+f.getInterfaceSubclass()+
+          " protocol="+f.getInterfaceProtocol()+"; IN maxPacket="+read.getMaxPacketSize()+
+          "; OUT maxPacket="+(write==null?"control":write.getMaxPacketSize()));
         return;
       }
       throw new Exception("No interrupt IN endpoint found");
@@ -226,6 +232,81 @@ public final class MainActivity extends Activity {
       updateState("USB handshake confirmed: sliding window A",true);
     }catch(Exception e){updateState("Handshake error: "+e.getMessage(),false);}
   });}
+
+  /**
+   * Independent one-shot, source-grounded experiment. The HMI reference
+   * explicitly allows starting without the first empty frame and includes
+   * a direct 0x22 example without TesterPresent. Never try further requests
+   * after a transport error or a negative UDS reply.
+   */
+  private void directRead(boolean published){
+    final int profile=profileSpinner.getSelectedItemPosition();
+    final int targetCid=published?Protocol.DOCUMENTED_BATTERY_CID:Protocol.cid(profile);
+    final int did=published?Protocol.DOCUMENTED_BATTERY_DID:(profile<3?0x0220:0xF130);
+    final String variant=published?"PUBLISHED_BMS_EXAMPLE":"DIRECT_SELECTED_COMPONENT";
+    startJob(()->{
+      Protocol.Session session=new Protocol.Session();
+      String cid=String.format(Locale.US,"%02X",targetCid);
+      try{
+        post(variant+": handshake -> one DID only; no empty packet, no TesterPresent, no CID sweep.");
+        byte[] h=exchange(Protocol.handshake(),variant+" / step 1 / handshake");
+        if(!session.acceptHandshake(h))throw new Exception("Handshake not accepted: "+Protocol.transportSummary(h));
+        post(variant+": handshake accepted; now sending only one read-only request.");
+        byte[] request=published?Protocol.publishedBatteryRequest():session.readDid(targetCid,did);
+        byte[] rx=exchange(request,variant+" / step 2 / CID "+cid+" / DID "+Protocol.didHex(did));
+        Protocol.Reply result=session.checked(rx,0x22,did);
+        final boolean candidate="UDS_DID_MATCH_FRAME_CANDIDATE".equals(result.status);
+        final String resultLine=variant+" / CID "+cid+" / DID "+Protocol.didHex(did)+
+          " -> "+result.status+(candidate?" [UNVERIFIED payload; response format needs validation]":"");
+        JSONObject row=new JSONObject();
+        row.put("mode",variant);row.put("cid",cid);row.put("did",Protocol.didHex(did));
+        row.put("status",result.status);row.put("response_cid",result.responseCid);
+        row.put("raw",Protocol.hex(rx));row.put("source_packet",published);
+        synchronized(values){values.add(row);}
+        post(resultLine);
+        ui.post(()->{
+          resultText.append(resultLine+"\n");
+          progressText.setText(candidate?"DID response candidate (not validated)":"No confirmed DID response");
+        });
+        if("TRANSPORT_00_FF_UNDECODED".equals(result.status)){
+          updateState("USB replied 00 FF. Exact transport error meaning unverified; no further traffic.",false);
+        }else{
+          updateState(resultLine,candidate);
+        }
+      }catch(Exception e){updateState(variant+" STOP: "+e.getMessage(),false);}
+    });
+  }
+
+  /**
+   * Read the standard USB HID Report Descriptor; this is a USB descriptor
+   * request, not a diagnostic command to the bicycle's CAN network.
+   * It can reveal whether report IDs are required by the interface.
+   */
+  private void inspectHid(){
+    startJob(()->{
+      try{
+        if(conn==null||iface==null)throw new Exception("Connect USB first");
+        byte[] descriptor=new byte[512];
+        int n=conn.controlTransfer(0x81,0x06,0x2200,iface.getId(),
+          descriptor,descriptor.length,1800);
+        if(n<0){updateState("HID report descriptor request failed: "+n,false);return;}
+        if(n==0){updateState("HID report descriptor is empty",false);return;}
+        byte[] raw=Arrays.copyOf(descriptor,n);
+        record("USB_DESCRIPTOR",raw,"HID Report Descriptor / "+n+" bytes (not ECU response)");
+        StringBuilder ids=new StringBuilder();
+        for(int i=0;i<n-1;i++){
+          if((raw[i]&255)==0x85){if(ids.length()>0)ids.append(", ");
+            ids.append(String.format(Locale.US,"0x%02X",raw[i+1]&255));i++;}
+        }
+        String details="HID report descriptor: "+n+" bytes; declared Report IDs="+
+          (ids.length()==0?"none identified":ids.toString())+
+          "; active USB interrupt endpoints "+(in==null?"none":in.getMaxPacketSize())+" bytes IN / "+
+          (out==null?"control":out.getMaxPacketSize()+" bytes OUT");
+        post(details);updateState(details,true);
+        ui.post(()->resultText.append(details+"\n"));
+      }catch(Exception e){updateState("HID descriptor inspection stopped: "+e.getMessage(),false);}
+    });
+  }
 
   /**
    * Fail-closed flow. We deliberately do not claim that UDS TesterPresent is
@@ -331,7 +412,7 @@ public final class MainActivity extends Activity {
   private String buildReport(){
     JSONObject root=new JSONObject();
     try{
-      root.put("app","Bosch BES2 USB Lab 4.0 (experimental read-only)");
+      root.put("app","Bosch BES2 USB Lab 4.1 (experimental read-only)");
       root.put("usb_vid_pid","108C:0155");
       root.put("hardware_validated",false);root.put("heartbeat_protocol_verified",false);root.put("sliding_window_a_full_implementation_verified",false);
       root.put("note","The JSON trace may include device serial numbers. Do not publish unredacted logs.");
