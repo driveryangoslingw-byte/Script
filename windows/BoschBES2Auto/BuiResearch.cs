@@ -2,7 +2,7 @@ namespace BoschBES2Auto;
 
 /// <summary>
 /// A bounded list of publicly described BUI ReadDataByIdentifier candidates.
-/// Only 0220 is confirmed on the owner's physical Intuvia.
+/// 0220 and 0249 have matched the owner's physical Intuvia, with 0249 cross-checked against its odometer display.
 /// Each run starts from a new handshake and sends exactly one read request.
 /// </summary>
 public static class BuiResearch
@@ -16,13 +16,29 @@ public static class BuiResearch
         new DidTarget(0x0220, "Версия ПО Intuvia", true),
         new DidTarget(0x0221, "Версия аппаратного обеспечения", false),
         new DidTarget(0x0222, "Дата производства", false),
-        new DidTarget(0x0249, "Показание одометра (не подтверждено)", false),
+        new DidTarget(0x0249, "Общий пробег Intuvia (метры → км)", true),
         new DidTarget(0x024A, "Язык интерфейса", false),
         new DidTarget(0x024B, "Единицы расстояния", false),
         new DidTarget(0x024C, "Яркость экрана днём", false),
         new DidTarget(0x0250, "Яркость экрана ночью", false),
         new DidTarget(0x0251, "Контрастность дисплея", false),
     };
+
+    /// <summary>
+    /// On this bike, DID 0249 returned 00 23 80 5E (2,326,622).
+    /// The Intuvia displayed 2326.6 km; the data fits an unsigned
+    /// big-endian meter counter / 1000, rounded to one decimal.
+    /// This has been cross-checked with one owner-provided reading.
+    /// </summary>
+    public static bool TryReadOdometer(byte[]? raw, out uint metres, out string kilometres)
+    {
+        metres = 0;
+        kilometres = "";
+        if (!TryPositiveRead(raw, 0x0249, out var data) || data.Length != 4) return false;
+        metres = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(data);
+        kilometres = (metres / 1000m).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        return true;
+    }
 
     public static bool IsAllowed(int did) => Targets.Any(item => item.Did == did);
     public static string Name(int did) => Targets.FirstOrDefault(item => item.Did == did)?.Label ?? "Неподдерживаемый DID";
