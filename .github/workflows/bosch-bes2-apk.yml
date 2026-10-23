@@ -1,15 +1,12 @@
 name: Bosch BES2 Android APK
-
 on:
   push:
     branches: [bosch-bes2-diagnostics-v3]
   pull_request:
     branches: [bosch-usb-tablet]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,13 +16,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Install Android platform
+      - name: Install Android SDK 35
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - name: Run protocol tests and assemble APK
+      - name: Test and build debug APK
         run: gradle --no-daemon testDebugUnitTest assembleDebug
       - uses: actions/upload-artifact@v4
         with:
