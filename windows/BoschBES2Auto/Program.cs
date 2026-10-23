@@ -22,6 +22,7 @@ internal static class Program
         {
             bool enumerate = false, probe = false;
             int delay = 0;
+            int did = 0x0220;
             string directory = ReportsFolder;
             for (int i = 0; i < args.Length; i++)
             {
@@ -33,9 +34,15 @@ internal static class Program
                         if (!int.TryParse(args[++i], out delay) || delay < 0 || delay > 3000)
                             throw new ArgumentException("--delay-ms: expected 0..3000.");
                         break;
+                    case "--did" when i + 1 < args.Length:
+                        string didText = args[++i].Replace("0x", "", StringComparison.OrdinalIgnoreCase);
+                        if (!int.TryParse(didText, System.Globalization.NumberStyles.HexNumber,
+                            System.Globalization.CultureInfo.InvariantCulture, out did) || !BuiResearch.IsAllowed(did))
+                            throw new ArgumentException("--did: choose a catalogued BUI DID (example: 0220, 0221, 024A).");
+                        break;
                     case "--report-dir" when i + 1 < args.Length: directory = Path.GetFullPath(args[++i]); break;
                     case "--help":
-                        Console.WriteLine("BoschBES2Auto --enumerate | --probe [--delay-ms 0..3000] [--report-dir PATH]");
+                        Console.WriteLine("BoschBES2Auto --enumerate | --probe [--did 0220|0221|...] [--delay-ms 0..3000] [--report-dir PATH]");
                         return 0;
                     default: throw new ArgumentException("Unknown or incomplete argument: " + args[i]);
                 }
@@ -47,7 +54,7 @@ internal static class Program
             try
             {
                 var result = new DiagnosticRunner().Run(new DiagnosticOptions {
-                    EnumerateOnly = enumerate, HandshakeDelayMs = delay, ReportDirectory = directory
+                    EnumerateOnly = enumerate, HandshakeDelayMs = delay, ResearchDid = did, ReportDirectory = directory
                 }, cancel.Token, Console.WriteLine);
                 Console.WriteLine($"OUTCOME={result.Outcome}; USB={result.UsbStatus}; HANDSHAKE={result.HandshakeStatus}; VERIFIED_ECU_VALUES={result.VerifiedEcuValues}");
                 Console.WriteLine("REPORT_FILE=" + result.ReportFile);
@@ -66,6 +73,7 @@ public sealed class DiagnosticWindow : Form
     private readonly Label state = new(), levels = new();
     private readonly TextBox logbox = new(), comparison = new();
     private readonly NumericUpDown delay = new() { Minimum = 0, Maximum = 3000, Value = 0, Width = 110 };
+    private readonly ComboBox didChoice = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 360 };
     private CancellationTokenSource? cancellation;
     private Task? activeRun;
 
@@ -100,7 +108,7 @@ public sealed class DiagnosticWindow : Form
         levels.Text = "USB: не проверен     Handshake: не проверен     Сессия: не установлена     ECU: 0 значений";
         levels.Dock = DockStyle.Fill; levels.ForeColor = Color.LightSteelBlue;
         layout.Controls.Add(levels, 0, 2);
-        state.Text = "Готов. Программа прочитает версию ПО Intuvia и сохранит результаты проверки.";
+        state.Text = "Готов. Выбери DID на вкладке «Исследование и сравнение». Для 0220 подтверждено чтение версии ПО Intuvia.";
         state.Dock = DockStyle.Fill; state.ForeColor = Color.Khaki;
         layout.Controls.Add(state, 0, 3);
         layout.Controls.Add(new Label { Text = "Intuvia 108C:0155 · один handshake и один запрос чтения · без изменения настроек\nПроверяется BUI. Диагностика мотора и аккумулятора пока не реализована.", Dock = DockStyle.Fill }, 0, 4);
@@ -115,10 +123,14 @@ public sealed class DiagnosticWindow : Form
         var settings = new FlowLayoutPanel { Dock = DockStyle.Fill };
         settings.Controls.Add(new Label { Text = "Задержка после handshake, мс:", AutoSize = true, Padding = new Padding(0, 5, 0, 0) });
         settings.Controls.Add(delay);
+        settings.Controls.Add(new Label { Text = "Параметр BUI (только чтение):", AutoSize = true, Padding = new Padding(12, 5, 0, 0) });
+        foreach (var target in BuiResearch.Targets) didChoice.Items.Add(target);
+        didChoice.SelectedIndex = 0; // 0220 is the sole hardware-confirmed parameter
+        settings.Controls.Add(didChoice);
         var compare = new Button { Text = "Сравнить JSON…", AutoSize = true };
         compare.Click += (_, _) => CompareReports(); settings.Controls.Add(compare);
         researchLayout.Controls.Add(settings, 0, 0);
-        researchLayout.Controls.Add(new Label { Text = "Выбранная задержка применяется к следующему запуску. Автоматического перебора нет.\nЛог содержит вызовы HidSharp, а фактический тип USB-транзакции требует отдельного USBPcap-захвата.", Dock = DockStyle.Fill }, 0, 1);
+        researchLayout.Controls.Add(new Label { Text = "Каждый запуск = новый handshake и только ОДИН выбранный DID. Для 0220 версия уже подтверждена.\nДругие DID — исследовательские; даже при ответе 62 их значения НЕ считаются подтверждёнными. USBPcap отдельно.", Dock = DockStyle.Fill }, 0, 1);
         PrepareText(comparison); researchLayout.Controls.Add(comparison, 0, 2);
         research.Controls.Add(researchLayout); tabs.TabPages.Add(research);
         layout.Controls.Add(tabs, 0, 5); Controls.Add(layout);
@@ -147,10 +159,11 @@ public sealed class DiagnosticWindow : Form
     private async void StartRun()
     {
         if (activeRun is { IsCompleted: false }) return;
-        start.Enabled = false; stop.Enabled = true; delay.Enabled = false; logbox.Clear();
+        start.Enabled = false; stop.Enabled = true; delay.Enabled = false; didChoice.Enabled = false; logbox.Clear();
         cancellation = new CancellationTokenSource();
-        state.Text = "Проверяю USB, согласовываю режим и выполняю один запрос чтения…";
-        var options = new DiagnosticOptions { HandshakeDelayMs = (int)delay.Value, ReportDirectory = Program.ReportsFolder };
+        state.Text = "Проверяю USB и выполняю один запрос BUI DID " + ((BuiResearch.DidTarget)didChoice.SelectedItem!).Did.ToString("X4") + "…";
+        var selected = (BuiResearch.DidTarget)didChoice.SelectedItem!;
+        var options = new DiagnosticOptions { HandshakeDelayMs = (int)delay.Value, ResearchDid = selected.Did, ReportDirectory = Program.ReportsFolder };
         try
         {
             var run = Task.Run(() => new DiagnosticRunner().Run(options, cancellation.Token, AppendLog));
@@ -158,9 +171,14 @@ public sealed class DiagnosticWindow : Form
             var result = await run;
             levels.Text = result.VerifiedEcuValues > 0
                 ? $"USB: подключён     Транспорт: Sliding Window A     Сессия: ответ подтверждён     BUI: {result.VerifiedEcuValues} значение"
-                : $"USB: {result.UsbStatus}     Handshake: {result.HandshakeStatus}     Сессия: {result.SessionStatus}     ECU: 0";
+                : result.Outcome == "BUI_READ_CANDIDATE_UNVERIFIED"
+                    ? $"USB: подключён     Транспорт: Sliding Window A     DID {result.ResearchDid}: кандидат ответа, значение НЕ проверено"
+                    : $"USB: {result.UsbStatus}     Handshake: {result.HandshakeStatus}     Сессия: {result.SessionStatus}     ECU: 0";
             state.Text = result.Outcome switch {
                 "BUI_SOFTWARE_VERSION_READ" => "Успешно прочитана версия ПО Intuvia: " + string.Join(", ", result.Values.Select(value => value.Value)) + ". Отчёт сохранён.",
+                "BUI_READ_CANDIDATE_UNVERIFIED" => "Получен ответ на DID " + result.ResearchDid + ": " +
+                    string.Join(", ", result.CandidateValues.Select(v => v.RawDataHex)) +
+                    ". Это только сырые данные; их назначение и единицы измерения НЕ подтверждены.",
                 "TRANSPORT_ERROR_00_FF" => "Получен 00 FF. Значение ошибки не расшифровано; чтение ECU не подтверждено. Сеанс закрыт.",
                 "NO_DEVICE" => "Bosch 108C:0155 не найден.",
                 "CANCELLED" => "Остановлено. Новые запросы не отправляются.",
@@ -172,7 +190,7 @@ public sealed class DiagnosticWindow : Form
             else AppendLog("Отчёт: " + result.ReportFile);
         }
         catch (Exception ex) { state.Text = "Ошибка выполнения: " + ex.Message; }
-        finally { activeRun = null; cancellation.Dispose(); cancellation = null; start.Enabled = true; stop.Enabled = false; delay.Enabled = true; }
+        finally { activeRun = null; cancellation.Dispose(); cancellation = null; start.Enabled = true; stop.Enabled = false; delay.Enabled = true; didChoice.Enabled = true; }
     }
 
     private void CompareReports()
