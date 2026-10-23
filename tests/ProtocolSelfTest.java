@@ -25,6 +25,11 @@ public final class ProtocolSelfTest {
     check(Protocol.handshakeResult(new byte[]{2,1,2}).equals("NOT_HANDSHAKE_REPLY"),"unexpected type");
     check(Protocol.handshakeResult(new byte[]{0,2,2}).startsWith("HANDSHAKE_UNKNOWN_STATUS"),"unexpected status");
     check(Protocol.handshakeResult(new byte[]{0,1,4}).startsWith("HANDSHAKE_UNKNOWN_MODE"),"unknown mode");
+    check(Protocol.negotiatedTransport(Protocol.handshakeResult(new byte[]{0,1,1})),"Legacy accepted for transport-only test");
+    check(Protocol.negotiatedTransport(Protocol.handshakeResult(new byte[]{0,1,2})),"Sliding A accepted for transport-only test");
+    check(Protocol.negotiatedTransport(Protocol.handshakeResult(new byte[]{0,1,3})),"Sliding B accepted for transport-only test");
+    check(!Protocol.negotiatedTransport(Protocol.handshakeResult(new byte[]{0,(byte)255,0})),"transport error never accepted");
+    check(!Protocol.negotiatedTransport(Protocol.handshakeResult(new byte[]{0,1,4})),"unknown negotiated mode never accepted");
     check(Protocol.handshake().length==64,"handshake padded length");
     check(Protocol.hex(Protocol.handshake()).startsWith("00 00 03 03 02 01"),"original 321 preserved");
     check(Protocol.hex(Protocol.handshakeVariant(1)).startsWith("00 00 03 02 01 03"),"documented 213 preference");
