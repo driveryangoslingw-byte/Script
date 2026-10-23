@@ -17,6 +17,20 @@ public final class ProtocolSelfTest {
     check(handshake.length==64,"handshake length");
     check(handshake[2]==3&&handshake[3]==3&&handshake[4]==2&&handshake[5]==1,"handshake payload");
     check(Protocol.summary(new byte[]{0,1,2},0).equals("HANDSHAKE_SLIDING_WINDOW_A"),"actual handshake");
+    check(Protocol.handshakeResult(new byte[]{0,1,1}).equals("HANDSHAKE_LEGACY"),"legacy negotiated");
+    check(Protocol.handshakeResult(new byte[]{0,1,2}).equals("HANDSHAKE_SLIDING_WINDOW_A"),"sliding A negotiated");
+    check(Protocol.handshakeResult(new byte[]{0,1,3}).equals("HANDSHAKE_SLIDING_WINDOW_B"),"sliding B negotiated");
+    check(Protocol.handshakeResult(new byte[]{0,(byte)255,0}).equals("HANDSHAKE_DEVICE_ERROR_FF"),"reject FF on handshake");
+    check(Protocol.handshakeResult(new byte[]{0,1}).equals("MISSING_HANDSHAKE_REPLY"),"short handshake response");
+    check(Protocol.handshakeResult(new byte[]{2,1,2}).equals("NOT_HANDSHAKE_REPLY"),"unexpected type");
+    check(Protocol.handshakeResult(new byte[]{0,2,2}).startsWith("HANDSHAKE_UNKNOWN_STATUS"),"unexpected status");
+    check(Protocol.handshakeResult(new byte[]{0,1,4}).startsWith("HANDSHAKE_UNKNOWN_MODE"),"unknown mode");
+    check(Protocol.handshake().length==64,"handshake padded length");
+    check(Protocol.hex(Protocol.handshake()).startsWith("00 00 03 03 02 01"),"original 321 preserved");
+    check(Protocol.hex(Protocol.handshakeVariant(1)).startsWith("00 00 03 02 01 03"),"documented 213 preference");
+    check(Protocol.hex(Protocol.handshakeVariant(2)).startsWith("00 00 03 01 02 03"),"documented 123 preference");
+    boolean invalidPattern=false;try{Protocol.handshakeVariant(3);}catch(IllegalArgumentException expected){invalidPattern=true;}
+    check(invalidPattern,"unknown handshake preference fails closed");
     byte[] rejection=new byte[64];rejection[1]=(byte)255;
     check(Protocol.parse(rejection,0x22,0x0220).status.equals("TRANSPORT_00_FF_UNDECODED"),"real 00FF");
     check(Protocol.summary(rejection,0x0220).equals("TRANSPORT_REJECTED_00_FF"),"compat status");
