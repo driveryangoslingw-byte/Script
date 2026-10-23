@@ -94,6 +94,40 @@ using (var json = JsonDocument.Parse(File.ReadAllText(researchResult.ReportFile!
         "research JSON clearly separates unverified candidates from verified values");
 }
 
+
+var odometerReply = observedBui.ToArray();
+odometerReply[14] = 0x49;
+odometerReply[15] = 0x00; odometerReply[16] = 0x23;
+odometerReply[17] = 0x80; odometerReply[18] = 0x5E;
+var odometerOptions = new DiagnosticOptions {
+    ResearchDid = 0x0249, HandshakeDelayMs = 0, HandshakeTimeoutMs = 25,
+    SessionTimeoutMs = 25, ReportDirectory = testDirectory
+};
+var odometerStream = new FakeStream(Raw(0, 1, 2), odometerReply, Raw(0, 0xFF));
+var odometerReport = Run(odometerStream, odometerOptions);
+Assert(odometerReport.Outcome=="BUI_ODOMETER_READ" &&
+    odometerReport.EcuStatus=="BUI_READ_CONFIRMED" &&
+    odometerReport.VerifiedEcuValues==1 && odometerReport.CandidateValues.Count==0,
+    "cross-checked odometer value is verified for exact DID 0249");
+Assert(odometerReport.Values.Count==1 &&
+    odometerReport.Values[0].Did=="0249" &&
+    odometerReport.Values[0].Value=="2326.6 km" &&
+    odometerReport.Values[0].RawDataHex=="00 23 80 5E",
+    "odometer report shows rounded kilometres and exact four raw bytes");
+Assert(odometerStream.Writes.Count==2 && odometerStream.Disposed &&
+    odometerStream.Writes[1].SequenceEqual(Protocol.ToWindowsReport(BuiResearch.BuildReadRequest(0x0249),65)),
+    "odometer session emits one confirmed read only and closes");
+using (var json = JsonDocument.Parse(File.ReadAllText(odometerReport.ReportFile!))) {
+    Assert(json.RootElement.GetProperty("verified_ecu_values").GetInt32()==1 &&
+        json.RootElement.GetProperty("values")[0].GetProperty("value").GetString()=="2326.6 km",
+        "odometer JSON persists verified km value");
+}
+var invalidOdoreply = odometerReply.ToArray(); invalidOdoreply[14]=0x21;
+var invalidOdoStream = new FakeStream(Raw(0,1,2),invalidOdoreply,Raw(0,0xFF));
+var invalidOdoReport=Run(invalidOdoStream,odometerOptions);
+Assert(invalidOdoReport.VerifiedEcuValues==0 && invalidOdoReport.Outcome=="TRANSPORT_ERROR_00_FF",
+    "odometer mode rejects a response for a different DID");
+
 var mismatchedDidResearch = new FakeStream(Raw(0, 1, 2), observedBui, Raw(0, 0xFF));
 var mismatchedReport = Run(mismatchedDidResearch, researchOptions);
 Assert(mismatchedReport.Outcome == "TRANSPORT_ERROR_00_FF" &&
