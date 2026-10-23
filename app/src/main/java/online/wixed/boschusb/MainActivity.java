@@ -122,7 +122,7 @@ public final class MainActivity extends Activity {
         else
             registerReceiver(receiver, filter);
         buildUi();
-        log("Bosch USB Lab 3.0 · экспериментальный read-only режим.");
+        log("Bosch USB Lab 3.1 · экспериментальный read-only режим.");
         log("Подтверждён только USB handshake; точный формат UDS-ответов на этом байке ещё неизвестен.");
     }
 
@@ -167,7 +167,7 @@ public final class MainActivity extends Activity {
         root.setPadding(22, 20, 22, 40);
         scroll.addView(root);
 
-        TextView heading = text("BOSCH USB LAB 3.0", 24, COLOR_ACCENT);
+        TextView heading = text("BOSCH USB LAB 3.1", 24, COLOR_ACCENT);
         heading.setTypeface(null, Typeface.BOLD);
         add(root, heading);
         add(root, text("Intuvia / BES2 · 108C:0155 · Xiaomi Pad / Android USB Host", 13, COLOR_MUTED));
@@ -185,6 +185,8 @@ public final class MainActivity extends Activity {
         extraDids.setChecked(false);
         add(root, extraDids);
         addButton(root, "3. АВТО · проверить все 21 комбинацию", this::runAuto);
+        addButton(root, "3a. АВТО · прямое чтение DID по 21 комбинации", this::runDirectSweep);
+        add(root, text("Проверяет выбранный DID сразу после handshake, без TesterPresent. Отличие от обычного АВТО: DID отправляется даже если ранее все 3E 00 давали 00 FF.", 12, COLOR_MUTED));
 
         add(root, text("РУЧНАЯ ПРОВЕРКА", 16, COLOR_ACCENT));
         add(root, text("Адрес CID (назначение компонента пока не подтверждено)", 13, COLOR_MUTED));
@@ -598,6 +600,75 @@ public final class MainActivity extends Activity {
         });
     }
 
+
+    /**
+     * Comparison against the published BES2 example which reads a DID directly.
+     * Unlike runAuto(), this never gates 0x22 on a successful 0x3E/TesterPresent.
+     * Only user-selected DID is read; 7 published CIDs x 3 initialization
+     * variants. No writes, session changes, or access-key enumeration.
+     */
+    private void runDirectSweep() {
+        final int timeoutMs = timeout();
+        final int did;
+        try { did = manualDid(); }
+        catch (Exception e) {
+            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
+            return;
+        }
+        startJob("Прямой DID " + Protocol.didHex(did) + " по 21 комбинации", () -> {
+            UsbDevice target = requireTarget();
+            int completed = 0, responses = 0, refused = 0;
+            for (int cid : Protocol.CIDS) {
+                for (Protocol.Variant variant : Protocol.Variant.values()) {
+                    if (cancel) break;
+                    completed++;
+                    progress("Прямой DID " + Protocol.didHex(did) + " "
+                        + completed + "/21 · CID " + Protocol.cidHex(cid)
+                        + " · " + variant.name());
+                    JSONObject item = baseResult(cid, variant);
+                    item.put("mode", "direct_read_without_tester_sweep");
+                    item.put("requested_did", Protocol.didHex(did));
+                    try {
+                        if (!startSession(target, cid, variant, timeoutMs)) {
+                            item.put("result", "HANDSHAKE_FAILED");
+                            showResult("CID " + Protocol.cidHex(cid) + " "
+                                + variant.name() + " · handshake failed");
+                        } else {
+                            readOne(item, cid, did, variant.testerSeq,
+                                    timeoutMs, "Direct DID " + Protocol.didHex(did)
+                                        + " without TesterPresent");
+                            JSONArray reads = item.optJSONArray("reads");
+                            if (reads != null && reads.length() > 0) {
+                                String status = reads.getJSONObject(reads.length() - 1)
+                                        .optString("status", "UNKNOWN");
+                                if (status.equals("TRANSPORT_00_FF")) refused++;
+                                if (status.equals("UDS_POSITIVE_CANDIDATE") ||
+                                        status.equals("UDS_NEGATIVE_CANDIDATE")) responses++;
+                                showResult("  CID " + Protocol.cidHex(cid) + " "
+                                    + variant.name() + " → " + status);
+                            }
+                        }
+                    } catch (Exception e) {
+                        if (cancel) break;
+                        item.put("error", e.toString());
+                        log("Direct DID CID " + Protocol.cidHex(cid) + " "
+                            + variant.name() + ": " + e.getMessage());
+                    }
+                    store(item);
+                    if (!cancel) Thread.sleep(220);
+                }
+                if (cancel) break;
+            }
+            String summary = "Прямой DID " + Protocol.didHex(did)
+                + ": " + completed + "/21, UDS-кандидаты=" + responses
+                + ", 00 FF=" + refused + ".";
+            showResult(summary);
+            progress(summary);
+            setState(cancel ? "Прямое чтение остановлено" :
+                    "Прямое чтение завершено — сохраните JSON-отчёт", !cancel);
+        });
+    }
+
     private void runManual(boolean readAfterTester) {
         final int cid = Protocol.CIDS[cidSpinner.getSelectedItemPosition()];
         final Protocol.Variant variant = Protocol.Variant.values()[variantSpinner.getSelectedItemPosition()];
@@ -662,7 +733,7 @@ public final class MainActivity extends Activity {
     private String report() {
         JSONObject root = new JSONObject();
         try {
-            root.put("app", "Bosch USB Lab 3.0");
+            root.put("app", "Bosch USB Lab 3.1");
             root.put("hardware", "Bosch BES2 / Intuvia 108C:0155");
             root.put("read_only", true);
             root.put("uds_wrapper_verified", false);
@@ -687,7 +758,7 @@ public final class MainActivity extends Activity {
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("application/json");
-        intent.putExtra(Intent.EXTRA_TITLE, "bosch-bes2-usb-lab-3.json");
+        intent.putExtra(Intent.EXTRA_TITLE, "bosch-bes2-usb-lab-3-1.json");
         startActivityForResult(intent, SAVE_JSON);
     }
 
