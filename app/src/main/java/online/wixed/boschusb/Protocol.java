@@ -45,7 +45,31 @@ public final class Protocol {
     default: return "Published DID (raw)";
     }
   }
-  public static byte[] handshake(){byte[] a=new byte[LEN];a[2]=3;a[3]=3;a[4]=2;a[5]=1;return a;}
+  /** Original reference negotiation 321; alternative 213/123 preferences are
+   * explicitly mentioned in Bosch eBike HIM. The order is a preference list,
+   * not three sequential requests. */
+  public static final String[] HANDSHAKE_PATTERNS={"321","213","123"};
+  public static byte[] handshake(){return handshakeVariant(0);}
+  public static byte[] handshakeVariant(int index){
+    if(index<0||index>=HANDSHAKE_PATTERNS.length)throw new IllegalArgumentException("Unknown handshake pattern");
+    byte[] a=new byte[LEN];a[2]=3;
+    String preference=HANDSHAKE_PATTERNS[index];
+    for(int i=0;i<3;i++)a[3+i]=(byte)(preference.charAt(i)-'0');
+    return a;
+  }
+  public static String handshakeResult(byte[] reply){
+    if(reply==null||reply.length<3)return "MISSING_HANDSHAKE_REPLY";
+    if((reply[0]&255)!=0)return "NOT_HANDSHAKE_REPLY";
+    int error=reply[1]&255,mode=reply[2]&255;
+    if(error==255)return "HANDSHAKE_DEVICE_ERROR_FF";
+    if(error!=1)return "HANDSHAKE_UNKNOWN_STATUS_"+String.format(Locale.US,"%02X",error);
+    switch(mode){
+      case 1:return "HANDSHAKE_LEGACY";
+      case 2:return "HANDSHAKE_SLIDING_WINDOW_A";
+      case 3:return "HANDSHAKE_SLIDING_WINDOW_B";
+      default:return "HANDSHAKE_UNKNOWN_MODE_"+String.format(Locale.US,"%02X",mode);
+    }
+  }
   public static byte[] initial(int seq){byte[] a=new byte[LEN];a[0]=2;a[1]=(byte)seq;a[2]=7;a[4]=(byte)255;a[5]=(byte)255;a[6]=7;return a;}
   public static byte[] read(int cid,int did,int seq){
     if(cid<0||cid>255||did<0||did>65535)throw new IllegalArgumentException("Invalid CID/DID");
