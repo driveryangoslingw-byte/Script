@@ -63,5 +63,38 @@ public final class Protocol {
     }
     return "UNCLASSIFIED_RAW";
   }
+
+  /**
+   * Bounded discovery candidates reported by community heartbeat experiments.
+   * These are NOT verified write channels, keys or brute-force security values.
+   */
+  public static final int[] DISCOVERY_CIDS={0x20,0x22,0x39,0x3A,0x5D,0x5E,0x5F};
+  public static final int MAX_TRANSPORT_REJECTS=3;
+  public static final long MIN_PROBE_DELAY_MS=1200;
+
+  /**
+   * UDS TesterPresent, service 0x3E subfunction 0x00.
+   * Diagnostic keepalive (not a programming or configuration write).
+   * It is NOT known to be identical to the unpublished Bosch heartbeat request.
+   */
+  public static byte[] testerPresent(int cid,int seq){
+    if(cid<0||cid>255)throw new IllegalArgumentException("Bad CID");
+    byte[] a=new byte[LEN]; a[0]=2; a[1]=(byte)seq; a[2]=7;
+    a[4]=(byte)255; a[5]=(byte)255; a[6]=10;
+    a[10]=(byte)cid;a[11]=3;a[12]=2;a[13]=0x3E;a[14]=0;
+    return a;
+  }
+  public static String testerSummary(byte[] b) {
+    if(b==null||b.length==0)return "NO_RESPONSE";
+    if(b.length>=2&&b[0]==0&&(b[1]&255)==255)return "TRANSPORT_REJECTED_00_FF";
+    if(b.length>=3&&b[0]==0&&b[1]==1&&b[2]==2)return "HANDSHAKE_ONLY";
+    // Only look inside likely message body, not untrusted header/padding.
+    for(int i=11;i+1<b.length;i++){
+      if((b[i]&255)==0x7E&&(b[i+1]&255)==0x00)return "TESTER_PRESENT_CANDIDATE_UNVERIFIED";
+      if(i+2<b.length&&(b[i]&255)==0x7F&&(b[i+1]&255)==0x3E)
+        return "UDS_TESTER_NEGATIVE_0x"+String.format(Locale.US,"%02X",b[i+2]&255);
+    }
+    return "NO_VERIFIED_TESTER_REPLY";
+  }
   public static String didHex(int did){return String.format(Locale.US,"%04X",did);}
 }
