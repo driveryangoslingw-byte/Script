@@ -169,5 +169,32 @@ public final class Protocol {
     if(reply.status.equals("UDS_TESTER_POSITIVE_FRAME_CANDIDATE"))return "TESTER_PRESENT_CANDIDATE_UNVERIFIED";
     return reply.status;
   }
+  /** Parse HID short/long items properly; do not mistake bytes inside
+   * a usage collection or long item for a Report ID tag. */
+  public static String hidReportIds(byte[] descriptor){
+    if(descriptor==null)return "none";
+    java.util.LinkedHashSet<Integer> found=new java.util.LinkedHashSet<>();
+    for(int i=0;i<descriptor.length;){
+      int prefix=u(descriptor[i++]);
+      if(prefix==0xFE){
+        if(i+2>descriptor.length)break;
+        int length=u(descriptor[i]);i+=2;
+        if(length>descriptor.length-i)break;
+        i+=length;continue;
+      }
+      int length=prefix&3;
+      if(length==3)length=4;
+      if(length>descriptor.length-i)break;
+      if(prefix==0x85 && length==1)found.add(u(descriptor[i]));
+      i+=length;
+    }
+    if(found.isEmpty())return "none";
+    StringBuilder labels=new StringBuilder();
+    for(int id:found){
+      if(labels.length()>0)labels.append(", ");
+      labels.append(String.format(Locale.US,"0x%02X",id));
+    }
+    return labels.toString();
+  }
   public static String didHex(int did){return String.format(Locale.US,"%04X",did);}
 }
