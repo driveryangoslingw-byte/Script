@@ -40,7 +40,7 @@ public final class MainActivity extends Activity {
   private UsbEndpoint in,out;
   private TextView stateText, progressText, traceText, resultText;
   private CheckBox initialCheck;
-  private Spinner profileSpinner;
+  private Spinner profileSpinner,handshakeSpinner;
   private volatile boolean busy=false, cancel=false;
   private String exportData="";
   private int count=0;
@@ -77,7 +77,7 @@ public final class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33)registerReceiver(usbReceiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(usbReceiver,f);
     buildUI();
-    post("BES2 4.1: documented direct read + guided transport diagnostics.");
+    post("BES2 4.2: handshake preference testing + documented read-only diagnostics.");
     post("This is not a speed-unlock tool; device-specific read responses remain unverified.");
   }
   private TextView text(String message,int size,int color){
@@ -96,7 +96,7 @@ public final class MainActivity extends Activity {
     root.setBackgroundColor(0xff0b1424);
     root.setPadding(22,18,22,38);
     scroll.addView(root);
-    TextView head=text("BOSCH BES2  •  TRANSPORT LAB 4.1",22,0xff87dcff);
+    TextView head=text("BOSCH BES2  •  TRANSPORT LAB 4.2",22,0xff87dcff);
     head.setTypeface(null,Typeface.BOLD);add(root,head);
     add(root,text("Intuvia / E-Bike HMI 108C:0155 | FREE · OFFLINE",13,0xffacc0d8));
     stateText=text("Not connected",17,0xffffc878);add(root,stateText);
@@ -117,8 +117,16 @@ public final class MainActivity extends Activity {
     button(root,"5 · Guided handshake / tester / DID",this::guidedRead);
     button(root,"6 · Passive USB receive (no CID traffic)",this::passiveListen);
     button(root,"7 · Inspect USB HID report descriptor (read-only)",this::inspectHid);
+    add(root,text("HANDSHAKE PREFERENCE (safe transport-only research)",14,0xff87dcff));
+    handshakeSpinner=new Spinner(this);
+    ArrayAdapter<String> handshakeAdapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,
+      new String[]{"321 · original (returns A on your bike)","213 · alternative documented preference","123 · alternative documented preference"});
+    handshakeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+    handshakeSpinner.setAdapter(handshakeAdapter);
+    handshakeSpinner.setBackgroundColor(0xffc8d7ec);add(root,handshakeSpinner);
+    button(root,"8 · Probe selected handshake only (no ECU traffic)",this::probeHandshakePreference);
     
-    add(root,text("DIRECT sends handshake + exactly one ReadDataByIdentifier (0x22) frame, with sequence 0 and no mandatory TesterPresent. PUBLISHED replays the exact documented battery part-number request. Legacy CID 3C may be unavailable on modern bikes. GUIDED is the old experimental flow. All flows stop on 00 FF; passive sends no diagnostic commands.",12,0xffffd08b));
+    add(root,text("DIRECT sends handshake + exactly one ReadDataByIdentifier (0x22) frame, with sequence 0 and no mandatory TesterPresent. PUBLISHED replays the documented BMS packet. Test handshake preference 321, 213 or 123 independently with button 8: no DID, no heartbeat, no CAN payload. Legacy CID 3C may be unavailable. Stops on 00 FF.",12,0xffffd08b));
 
     button(root,"Stop requests",()->{cancel=true;post("Stop requested.");});
     progressText=text("Read: 0 confirmed",14,0xffc9ddf6);add(root,progressText);
@@ -232,6 +240,33 @@ public final class MainActivity extends Activity {
       updateState("USB handshake confirmed: sliding window A",true);
     }catch(Exception e){updateState("Handshake error: "+e.getMessage(),false);}
   });}
+
+  /**
+   * Compare the three ordered protocol preferences published in Bosch eBike HIM.
+   * Only a HID transport negotiation packet is sent. No CAN payload follows,
+   * including when the device negotiates an unsupported transport mode.
+   */
+  private void probeHandshakePreference(){
+    final int index=handshakeSpinner.getSelectedItemPosition();
+    final String preference=Protocol.HANDSHAKE_PATTERNS[index];
+    startJob(()->{
+      try{
+        post("HANDSHAKE_ONLY preference="+preference+
+          " (three documented modes, NOT a CID, no data/UDS traffic).");
+        byte[] rx=exchange(Protocol.handshakeVariant(index),
+          "Preference "+preference+" / USB handshake only");
+        String mode=Protocol.handshakeResult(rx);
+        final String output="Handshake "+preference+" => "+mode+
+          " / raw="+Protocol.hex(Arrays.copyOf(rx,Math.min(3,rx.length)));
+        post(output);
+        ui.post(()->resultText.append(output+"\\n"));
+        updateState(output,"HANDSHAKE_SLIDING_WINDOW_A".equals(mode)||
+          "HANDSHAKE_SLIDING_WINDOW_B".equals(mode)||
+          "HANDSHAKE_LEGACY".equals(mode));
+        post("No ECU requests sent. To test a different preference, re-connect the bike and select it manually.");
+      }catch(Exception e){updateState("Handshake-only probe failed: "+e.getMessage(),false);}
+    });
+  }
 
   /**
    * Independent one-shot, source-grounded experiment. The HMI reference
@@ -408,7 +443,7 @@ public final class MainActivity extends Activity {
   private String buildReport(){
     JSONObject root=new JSONObject();
     try{
-      root.put("app","Bosch BES2 USB Lab 4.1 (experimental read-only)");
+      root.put("app","Bosch BES2 USB Lab 4.2 (experimental read-only)");
       root.put("usb_vid_pid","108C:0155");
       root.put("hardware_validated",false);root.put("heartbeat_protocol_verified",false);root.put("sliding_window_a_full_implementation_verified",false);
       root.put("note","The JSON trace may include device serial numbers. Do not publish unredacted logs.");
