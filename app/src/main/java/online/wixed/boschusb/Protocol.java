@@ -70,6 +70,13 @@ public final class Protocol {
       default:return "HANDSHAKE_UNKNOWN_MODE_"+String.format(Locale.US,"%02X",mode);
     }
   }
+  /** Only these successfully negotiated transport modes can be reported as accepted.
+   * This is independent of whether ECU-level UDS requests will work. */
+  public static boolean negotiatedTransport(String result){
+    return "HANDSHAKE_SLIDING_WINDOW_A".equals(result)
+      || "HANDSHAKE_SLIDING_WINDOW_B".equals(result)
+      || "HANDSHAKE_LEGACY".equals(result);
+  }
   public static byte[] initial(int seq){byte[] a=new byte[LEN];a[0]=2;a[1]=(byte)seq;a[2]=7;a[4]=(byte)255;a[5]=(byte)255;a[6]=7;return a;}
   public static byte[] read(int cid,int did,int seq){
     if(cid<0||cid>255||did<0||did>65535)throw new IllegalArgumentException("Invalid CID/DID");
