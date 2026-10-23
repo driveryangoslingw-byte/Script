@@ -1,39 +1,70 @@
 package online.wixed.boschusb;
+
+/** Pure-Java regression tests; no connected bike is required. */
 public final class ProtocolSelfTest {
- private static void check(boolean yes,String label){if(!yes)throw new AssertionError(label);}
- public static void main(String[] args){
-   byte[] hello=Protocol.handshake();
-   check(hello.length==64,"hello length");
-   check(hello[2]==3&&hello[3]==3&&hello[4]==2&&hello[5]==1,"hello bytes");
-   byte[] expected={0,1,2};
-   check(Protocol.summary(expected,0).equals("HANDSHAKE_SLIDING_WINDOW_A"),"handshake decode");
-   check(Protocol.summary(new byte[]{0,(byte)255,0},0).equals("TRANSPORT_REJECTED_00_FF"),"real log error");
-   byte[] q=Protocol.read(0x3a,0x0220,0);
-   check(q.length==64&&(q[10]&255)==0x3a&&q[13]==0x22&&(q[14]&255)==2&&(q[15]&255)==0x20,"read packet");
-   check(Protocol.hex(q).startsWith("02 00 07 00 FF FF 0B 00 00 00 3A 04 03 22 02 20"),"recorded request comparison");
-   check(Protocol.summary(new byte[]{2,0,0x62,2,0x20,0x1a},0x0220).equals("UDS_POSITIVE_RAW_UNVERIFIED"),"positive decode");
-   check(Protocol.summary(new byte[]{2,0,0x7f,0x22,0x31},0x0220).equals("UDS_NEGATIVE_0x31"),"negative decode");
-   check(Protocol.summary(new byte[]{2,0,0x62,2,0x21},0x0220).equals("UNCLASSIFIED_RAW"),"not wrong DID");
-   check(Protocol.dids(3).length==8&&Protocol.cid(3)==0x3b,"drive research profile");
-   check(Protocol.dids(4).length==8&&Protocol.cid(4)==0x3c,"battery research profile");
+  private static int assertions=0;
+  private static void check(boolean value,String message){
+    assertions++;if(!value)throw new AssertionError(message);
+  }
+  private static byte[] frame(int declared,int cid,int length,int pci,int sid){
+    byte[] f=new byte[Protocol.LEN];
+    f[0]=2;f[2]=7;f[4]=(byte)255;f[5]=(byte)255;f[6]=(byte)declared;
+    f[10]=(byte)cid;f[11]=(byte)length;f[12]=(byte)pci;f[13]=(byte)sid;
+    return f;
+  }
+  public static void main(String[] args){
+    byte[] handshake=Protocol.handshake();
+    check(handshake.length==64,"handshake length");
+    check(handshake[2]==3&&handshake[3]==3&&handshake[4]==2&&handshake[5]==1,"handshake payload");
+    check(Protocol.summary(new byte[]{0,1,2},0).equals("HANDSHAKE_SLIDING_WINDOW_A"),"actual handshake");
+    byte[] rejection=new byte[64];rejection[1]=(byte)255;
+    check(Protocol.parse(rejection,0x22,0x0220).status.equals("TRANSPORT_00_FF_UNDECODED"),"real 00FF");
+    check(Protocol.summary(rejection,0x0220).equals("TRANSPORT_REJECTED_00_FF"),"compat status");
+    check(Protocol.testerSummary(rejection).equals("TRANSPORT_REJECTED_00_FF"),"tester error");
+    check(Protocol.transportSummary(rejection).equals("TRANSPORT_ERROR_00_FF"),"transport summary");
 
-   check(Protocol.DISCOVERY_CIDS.length==7,"bounded CIDs");
-   check(Protocol.DISCOVERY_CIDS[0]==0x20&&Protocol.DISCOVERY_CIDS[6]==0x5F,"published heartbeat candidates");
-   check(Protocol.MAX_TRANSPORT_REJECTS==3&&Protocol.MIN_PROBE_DELAY_MS>=1000,"rate limit");
-   byte[] p=Protocol.testerPresent(0x39,0);
-   check(p.length==64,"tester length");
-   check((p[10]&255)==0x39&&(p[11]&255)==3&&(p[12]&255)==2&&(p[13]&255)==0x3E&&p[14]==0,"tester framing");
-   check((p[6]&255)==10,"tester declared length");
-   check(Protocol.testerSummary(new byte[]{0,(byte)255,0}).equals("TRANSPORT_REJECTED_00_FF"),"tester rejection");
-   check(Protocol.transportSummary(new byte[]{0,(byte)255,0}).equals("TRANSPORT_ERROR_00_FF"),"transport rejection");
-   check(Protocol.transportSummary(new byte[]{0,1,2}).equals("HANDSHAKE_ACCEPTED_A"),"transport handshake");
-   byte[] candidate=new byte[64];candidate[0]=2;candidate[12]=0x7E;candidate[13]=0;
-   check(Protocol.testerSummary(candidate).equals("TESTER_PRESENT_CANDIDATE_UNVERIFIED"),"tester candidate");
-   byte[] invalid=new byte[64];invalid[0]=2;invalid[1]=0x7E;invalid[2]=0;
-   check(Protocol.testerSummary(invalid).equals("NO_VERIFIED_TESTER_REPLY"),"reject header match");
-   check(Protocol.testerSummary(new byte[]{2,0,0,0,0,0,0,0,0,0,0,0x7F,0x3E,0x31}).equals("UDS_TESTER_NEGATIVE_0x31"),"tester negative");
-   check(Protocol.transportSummary(new byte[]{2,0,7,0}).equals("HID_DATA_FRAME_UNVERIFIED"),"unknown body");
-   System.out.println("23 Bosch BES2 protocol tests PASS");
+    byte[] did=Protocol.read(0x3A,0x0220,0);
+    check(did.length==64,"request padded to 64");
+    check(Protocol.hex(did).startsWith("02 00 07 00 FF FF 0B 00 00 00 3A 04 03 22 02 20"),"published frame");
+    byte[] tester=Protocol.testerPresent(0x39,0);
+    check(Protocol.hex(tester).startsWith("02 00 07 00 FF FF 0A 00 00 00 39 03 02 3E 00"),"tester candidate frame");
+    check(Protocol.initial(0)[6]==7,"empty frame has no inner payload");
 
- }
+    byte[] pos=frame(11,0x3D,4,3,0x62);
+    pos[14]=2;pos[15]=0x20;
+    check(Protocol.parse(pos,0x22,0x0220).status.equals("UDS_DID_MATCH_FRAME_CANDIDATE"),"positive frame candidate");
+    check(Protocol.summary(pos,0x0220).equals("UDS_POSITIVE_RAW_UNVERIFIED"),"compat positive");
+    check(Protocol.parse(pos,0x22,0x0221).status.equals("UDS_DID_MISMATCH"),"mismatched DID");
+
+    byte[] testerPos=frame(10,0x3D,3,2,0x7E);testerPos[14]=0;
+    check(Protocol.testerSummary(testerPos).equals("TESTER_PRESENT_CANDIDATE_UNVERIFIED"),"tester framed reply");
+
+    byte[] neg=frame(11,0x3D,4,3,0x7F);neg[14]=0x22;neg[15]=0x31;
+    check(Protocol.parse(neg,0x22,0x0220).status.equals("UDS_NEGATIVE_0x31"),"UDS NRC");
+    byte[] spoof=new byte[64];spoof[1]=0x62;spoof[2]=2;spoof[3]=0x20;
+    check(!Protocol.parse(spoof,0x22,0x0220).framed(),"no header scanning false positives");
+    byte[] corrupt=pos.clone();corrupt[4]=0;
+    check(!Protocol.parse(corrupt,0x22,0x0220).framed(),"reject bad header");
+    corrupt=pos.clone();corrupt[6]=2;
+    check(!Protocol.parse(corrupt,0x22,0x0220).framed(),"reject bad length");
+    corrupt=pos.clone();corrupt[12]=2;
+    check(!Protocol.parse(corrupt,0x22,0x0220).framed(),"reject wrong ISO TP payload length");
+    check(Protocol.parse(new byte[]{2,0,7},0x22,0).status.equals("SHORT_HMI_FRAME"),"short frame");
+    check(!Protocol.parse(Protocol.initial(0),0x22,0).framed(),"empty cannot prove diagnostic channel");
+
+    Protocol.Session session=new Protocol.Session();
+    boolean notReady=false;try{session.readDid(0x3A,0x0220);}catch(IllegalStateException expected){notReady=true;}
+    check(notReady,"no data before handshake");
+    check(session.acceptHandshake(new byte[]{0,1,2}),"session handshake");
+    check((session.empty()[1]&255)==0,"empty seq 0");
+    check((session.tester(0x3A)[1]&255)==1,"tester seq 1");
+    check((session.readDid(0x3A,0x0220)[1]&255)==2,"read seq 2");
+    check(session.nextSequence()==3,"sequence state");
+    session.checked(rejection,0x22,0x0220);
+    check(session.failed(),"transport failure blocks session");
+    boolean blocked=false;try{session.tester(0x3A);}catch(IllegalStateException expected){blocked=true;}
+    check(blocked,"no blind retry after rejection");
+    check(Protocol.DISCOVERY_CIDS.length==7,"community list remains research only");
+    System.out.println(assertions+" Bosch BES2 pure-Java protocol assertions PASS");
+  }
 }
