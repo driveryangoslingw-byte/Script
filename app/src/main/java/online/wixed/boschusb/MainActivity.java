@@ -293,13 +293,9 @@ public final class MainActivity extends Activity {
         if(n==0){updateState("HID report descriptor is empty",false);return;}
         byte[] raw=Arrays.copyOf(descriptor,n);
         record("USB_DESCRIPTOR",raw,"HID Report Descriptor / "+n+" bytes (not ECU response)");
-        StringBuilder ids=new StringBuilder();
-        for(int i=0;i<n-1;i++){
-          if((raw[i]&255)==0x85){if(ids.length()>0)ids.append(", ");
-            ids.append(String.format(Locale.US,"0x%02X",raw[i+1]&255));i++;}
-        }
+        String reportIds=Protocol.hidReportIds(raw);
         String details="HID report descriptor: "+n+" bytes; declared Report IDs="+
-          (ids.length()==0?"none identified":ids.toString())+
+          reportIds+
           "; active USB interrupt endpoints "+(in==null?"none":in.getMaxPacketSize())+" bytes IN / "+
           (out==null?"control":out.getMaxPacketSize()+" bytes OUT");
         post(details);updateState(details,true);
