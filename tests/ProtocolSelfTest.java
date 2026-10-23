@@ -52,6 +52,10 @@ public final class ProtocolSelfTest {
     byte[] publishedBytes=new byte[]{2,0,7,0,(byte)255,(byte)255,11,0,0,0,0x3C,4,3,0x22,(byte)0xF1,0x30};
     check(java.util.Arrays.equals(java.util.Arrays.copyOf(reference,16),publishedBytes),
       "exact documented BMS request (no empty frame / TesterPresent)");
+    check(Protocol.OBSERVED_BUI_CID==0x3A&&Protocol.OBSERVED_BUI_DID==0x0220,"observed BUI target");
+    byte[] observedBui=Protocol.read(Protocol.OBSERVED_BUI_CID,Protocol.OBSERVED_BUI_DID,0);
+    check(Protocol.hex(observedBui).startsWith("02 00 07 00 FF FF 0B 00 00 00 3A 04 03 22 02 20"),"one-tap BUI read wire bytes");
+    check(Protocol.parse(rejection,0x22,Protocol.OBSERVED_BUI_DID).status.equals("TRANSPORT_00_FF_UNDECODED"),"00 FF cannot count as BUI data");
     check(Protocol.DOCUMENTED_BATTERY_CID==0x3C&&Protocol.DOCUMENTED_BATTERY_DID==0xF130,
       "documented reference target");
 
