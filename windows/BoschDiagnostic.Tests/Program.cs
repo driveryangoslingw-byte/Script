@@ -65,9 +65,9 @@ using (var json = JsonDocument.Parse(File.ReadAllText(confirmed.ReportFile!))) {
 }
 
 
-var researchPositive = observedBui.ToArray(); researchPositive[14] = 0x21;
+var researchPositive = observedBui.ToArray(); researchPositive[14] = 0x22; researchPositive[10] = 6; researchPositive[11] = 5; researchPositive[15] = 0x13; researchPositive[16] = 0x16;
 var researchOptions = new DiagnosticOptions {
-    ResearchDid = 0x0221, HandshakeDelayMs = 0, HandshakeTimeoutMs = 25,
+    ResearchDid = 0x0222, HandshakeDelayMs = 0, HandshakeTimeoutMs = 25,
     SessionTimeoutMs = 25, ReportDirectory = testDirectory
 };
 var researchStream = new FakeStream(Raw(0, 1, 2), researchPositive, Raw(0, 0xFF));
@@ -77,23 +77,57 @@ Assert(researchResult.Outcome == "BUI_READ_CANDIDATE_UNVERIFIED" &&
     researchResult.VerifiedEcuValues == 0 && researchResult.Values.Count == 0,
     "new DID matches CAN/UDS frame but is NOT interpreted or called a verified ECU value");
 Assert(researchResult.CandidateValues.Count == 1 &&
-    researchResult.CandidateValues[0].Did == "0221" &&
-    researchResult.CandidateValues[0].RawDataHex == "05 09 02 00" &&
+    researchResult.CandidateValues[0].Did == "0222" &&
+    researchResult.CandidateValues[0].RawDataHex == "13 16" &&
     researchResult.CandidateValues[0].Validation == "STRUCTURAL_CANDIDATE_ONLY_NOT_INTERPRETED",
-    "research candidate records DID and raw bytes explicitly without claiming hardware version");
-Assert(researchResult.ResearchDid == "0221" && researchResult.UnverifiedCandidateFrames == 1 &&
+    "research candidate records DID and raw bytes explicitly without claiming date semantics");
+Assert(researchResult.ResearchDid == "0222" && researchResult.UnverifiedCandidateFrames == 1 &&
     researchStream.Writes.Count == 2 && researchStream.Disposed,
     "research session sends exactly handshake + selected single read and then closes");
 Assert(researchStream.Writes[0].SequenceEqual(Protocol.ToWindowsReport(Protocol.Handshake(), 65)) &&
-    researchStream.Writes[1].SequenceEqual(Protocol.ToWindowsReport(BuiResearch.BuildReadRequest(0x0221), 65)),
+    researchStream.Writes[1].SequenceEqual(Protocol.ToWindowsReport(BuiResearch.BuildReadRequest(0x0222), 65)),
     "new runner emits correct selected DID wire bytes only");
 using (var json = JsonDocument.Parse(File.ReadAllText(researchResult.ReportFile!))) {
     Assert(json.RootElement.GetProperty("verified_ecu_values").GetInt32() == 0 &&
-        json.RootElement.GetProperty("research_did").GetString() == "0221" &&
-        json.RootElement.GetProperty("candidate_values")[0].GetProperty("raw_data_hex").GetString() == "05 09 02 00",
+        json.RootElement.GetProperty("research_did").GetString() == "0222" &&
+        json.RootElement.GetProperty("candidate_values")[0].GetProperty("raw_data_hex").GetString() == "13 16",
         "research JSON clearly separates unverified candidates from verified values");
 }
 
+
+
+// Owner observed BUI 0221 twice as 00 00 02 02; published Bosch
+// DiagnosticTool manual labels matching Intuvia/BUI255 bytes as 0.0.2.2.
+var hardwareReply = observedBui.ToArray();
+hardwareReply[14] = 0x21;
+hardwareReply[15] = 0; hardwareReply[16] = 0; hardwareReply[17] = 2; hardwareReply[18] = 2;
+var hardwareOptions = new DiagnosticOptions {
+    ResearchDid = 0x0221, HandshakeTimeoutMs = 25, SessionTimeoutMs = 25,
+    ReportDirectory = testDirectory
+};
+var hardwareStream = new FakeStream(Raw(0, 1, 2), hardwareReply, Raw(0, 0xFF));
+var hardwareReport = Run(hardwareStream, hardwareOptions);
+Assert(hardwareReport.Outcome == "BUI_HARDWARE_VERSION_READ" &&
+    hardwareReport.VerifiedEcuValues == 1 && hardwareReport.CandidateValues.Count == 0 &&
+    hardwareReport.EcuStatus == "BUI_READ_CONFIRMED",
+    "known DID 0221 is recognized as a hardware version only");
+Assert(hardwareReport.Values.Single().Did == "0221" &&
+    hardwareReport.Values.Single().Value == "0.0.2.2" &&
+    hardwareReport.Values.Single().RawDataHex == "00 00 02 02",
+    "hardware version and original four bytes are stored separately");
+Assert(hardwareStream.Writes.Count == 2 && hardwareStream.Disposed &&
+    hardwareStream.Writes[1].SequenceEqual(Protocol.ToWindowsReport(BuiResearch.BuildReadRequest(0x0221), 65)),
+    "hardware read uses the established packet encoder and closes after reply");
+using (var json = JsonDocument.Parse(File.ReadAllText(hardwareReport.ReportFile!))) {
+    Assert(json.RootElement.GetProperty("verified_ecu_values").GetInt32() == 1 &&
+        json.RootElement.GetProperty("values")[0].GetProperty("value").GetString() == "0.0.2.2",
+        "hardware version saved in JSON with verified value");
+}
+var wrongHardware = hardwareReply.ToArray(); wrongHardware[14] = 0x22;
+var wrongHardwareStream = new FakeStream(Raw(0,1,2), wrongHardware, Raw(0,0xFF));
+var wrongHardwareReport = Run(wrongHardwareStream, hardwareOptions);
+Assert(wrongHardwareReport.VerifiedEcuValues==0 && wrongHardwareReport.Outcome=="TRANSPORT_ERROR_00_FF",
+    "wrong DID rejected in hardware-version mode");
 
 var odometerReply = observedBui.ToArray();
 odometerReply[14] = 0x49;
