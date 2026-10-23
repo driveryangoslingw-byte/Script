@@ -1,33 +1,31 @@
-# Bosch BES2 USB Transport Lab 4.0 — Android (read-only)
+# Bosch BES2 USB Transport Lab 4.1 — Android (read-only)
 
-Experimental diagnostics app for the older Bosch BES2 Intuvia HID `108C:0155` (NOT Bosch Smart System/BES3).
+Experimental tool for **Bosch BES2 Intuvia** HID device `108C:0155`, not Bosch BES3 / Smart System. **USB handshake confirmed on user hardware; ECU diagnostics are not yet confirmed.**
 
-## What changed in 4.0
-- Removed the UI for automatic CID discovery after the attached real-world log showed **all 21 combinations** rejected with `00 FF`.
-- **Guided handshake / heartbeat candidate / DID** performs one bounded, read-only sequence for the selected CID:
-  1. A single 64-byte Bosch HMI handshake (expect `00 01 02`, Sliding Window A).
-  2. Optionally send the first empty data packet, sequence 0 (enabled by default). A `00 FF` or unrecognized packet stops the flow.
-  3. UDS TesterPresent (`3E 00`) using sequence tracking. **This is only a candidate; Bosch's original heartbeat frame is not publicly confirmed.**
-  4. Only after a framed candidate positive response, send one DID read (`22`) and log its raw response.
-- **Passive receive** starts with handshake and then listens to USB IN for 4 short windows. It sends no diagnostic commands.
-- Strict frame parsing checks envelope layout and ISO-TP single-frame length at known offsets, instead of scanning arbitrary bytes for `62`, `7F` or `7E`.
-- Fail-closed session tracking prevents continued commands after an unknown transport reply.
-- Reports carry explicit `heartbeat_protocol_verified=false` and `sliding_window_a_full_implementation_verified=false` flags. USB handshake success is not equivalent to a verified routed ECU session.
+## New in 4.1 — test the real published command directly
+Version 4.0 never reached the DID read when a speculative TesterPresent failed. The published Bosch eBike HIM document actually shows a direct ISO-TP ReadDataByIdentifier frame without a prerequisite heartbeat and says the first empty request is optional.
 
-## Install
-Go to the latest successful **Bosch BES2 Android APK** workflow for branch `bosch-usb-tablet`. Download the `Bosch-BES2-Diagnostic-APK` artifact ZIP, extract `app-debug.apk` and install it. Connect the powered bike and the Android tablet with a USB data cable. Do not ride the bike while connected.
+Added three independent read-only actions:
 
-## What has actually been observed
-User-supplied logs from Bosch USB Lab 3.1:
-- Host detects Bosch VID:PID `108C:0155`, USB OUT endpoint `0x01` and IN `0x81`.
-- Host handshake `00 00 03 03 02 01 ...` responds `00 01 02 ...` — negotiated mode 2.
-- An attempted empty frame, UDS TesterPresent and DID `0220` on many CIDs all return `00 FF`.
-- That status is **not** a UDS Negative Response and its exact transport meaning is unverified. No working channel or DID read has been demonstrated.
+- **3 · DIRECT read / selected CID (no heartbeat):** handshake `00 00 03 03 02 01`, await `00 01 02`, then exactly one `0x22` read on selected profile with sequence 0. No empty packet and no TesterPresent; never brute-force addresses.
+- **4 · PUBLISHED BMS example:** handshake, then **exactly one** public reference frame (64 bytes padded with zeros): `02 00 07 00 FF FF 0B 00 00 00 3C 04 03 22 F1 30`. This reads the BMS part-number DID `F130` from legacy CID `3C`. This **may not respond** on the user's newer software; it is a faithful *wire-format reference*, not a guaranteed working channel.
+- **7 · Inspect USB HID report descriptor:** standard USB GET_DESCRIPTOR (report type 0x22) on the claimed interface. No UDS command, no CAN traffic. Parses report-ID items properly and displays interface/endpoint packet sizes. Some devices may reject that descriptor read without affecting other functions.
 
-### Limits
-This build does not implement a fully reverse-engineered Sliding Window A transport or Bosch heartbeat discovery. Such a claim would require a genuine working Bosch DiagnosticTool USB capture or additional independent protocol documentation. It does **not** edit speed limits, write to ECUs, reset modules or guess access keys. It is a transport-analysis build, not a proven diagnostic or tuning tool.
+**5 · Guided handshake / tester / DID** remains available for comparison, but the `3E 00` keepalive is only a candidate, **not a verified Bosch-specific heartbeat**. **6 · Passive receive** listens with no diagnostic payloads.
 
-Raw logs can contain device serial numbers and other identifying data. Review before sharing.
+All active probes send **at most one ECU diagnostic request per click** (guided additionally sends one experimental TesterPresent and only proceeds after a plausible positive frame), stop on unknown responses and do not try other CIDs automatically. A `00 FF` reply is classified as a USB transport-level error; its detailed cause is unknown and must not be misreported as UDS Negative Response or an incorrect CID.
 
-## Source
-Bosch eBike HIM (community reverse engineering): https://id.scribd.com/document/810278403/bosch
+## Install and test
+Open the latest successful GitHub Actions workflow **Bosch BES2 Android APK** for branch `bosch-usb-tablet`. Download artifact `Bosch-BES2-Diagnostic-APK`, unzip and install `app-debug.apk`. Connect the powered stationary bike to your Android tablet via USB data cable.
+
+For the next test: `1 Find/Connect` -> `7 Inspect USB HID report descriptor` -> `3 DIRECT read` with Display BUI CID 3A -> `4 PUBLISHED BMS example`. Each direct action negotiates a fresh handshake and sends just one DID read. Report the raw HEX and complete status from each. Redact device serial numbers before sharing JSON.
+
+## Technical and safety limitations
+- Live hardware so far: 64-byte interrupt transfers, VID:PID `108C:0155`, OUT endpoint `01`, IN `81`, USB handshake accepted `00 01 02`.
+- A previous published empty packet and TesterPresent candidate on CID `3A` returned `00 FF`. Passive mode returned zero unsolicited frames.
+- Transport session machinery, response framing, true routing, and original Bosch heartbeat remain incompletely reverse engineered. **This build does not claim a working diagnostic reader or repaired bicycle.**
+- No motor parameter writes, resets, firmware changes, unlocks or security-access requests. Keep bicycle stationary while plugged in.
+- Saved diagnostic JSON may include hardware identifiers, serial numbers and private data.
+
+## Protocol reference
+Bosch eBike HIM community document: https://id.scribd.com/document/810278403/bosch — relevant sections *USB-Protokoll*, *Erste Anfrage*, *Daten / Request* and *Geräte*.
