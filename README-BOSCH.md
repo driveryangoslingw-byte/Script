@@ -1,37 +1,26 @@
-# Bosch BES2 USB Investigation 4.4
+# Bosch BES2 USB Investigation 4.5 — one button
 
-Read-only Android USB test for the **older BES2 Intuvia** USB HID interface `108C:0155`. BES3 Smart System tooling and procedures **do not apply**.
+This native Android app is for the older Bosch BES2 Intuvia USB HID device `108C:0155`. BES3 is a different platform.
 
-## What the new ONE BUTTON does
+## How to use (one action)
 
-With the bike **powered on and Intuvia mounted**, connect by USB data cable and press **START AUTOMATIC DIAGNOSIS**.
+1. Power on the stationary bicycle, leave Intuvia fitted, connect the USB **data** cable to the Android tablet.
+2. Open the app and press **START ALL TESTS / ЗАПУСТИТЬ**. If Android requests access to the USB device, tap **Allow** (this system permission cannot be bypassed).
+3. The app **automatically** records the standard USB HID report descriptor, negotiates the proven 321 USB handshake, captures three seconds of incoming USB packets, sends exactly one read-only BUI DID request (CID `3A`, DID `0220`), and stops on the first transport rejection.
+4. **On Android 10+**, the JSON report is saved automatically in **Downloads/Bosch-BES2/**, with a timestamped name. A private backup is also kept inside the app. Manual report export is optional.
 
-1. Record USB HID report descriptor and endpoint report sizes (standard USB only).
-2. Send the **observed successful** `321` handshake *once*. Your USB replies: `00 01 02`, Sliding Window A.
-3. Capture USB IN for 3 seconds without sending ECU messages, logging any unsolicited packets.
-4. Send **one** documented-format `ReadDataByIdentifier(0x0220)` addressed to current-era **BUI CID `3A`**, rather than obsolete old BMS **CID `3C`**. On a raw `00 FF` reply, stop immediately.
-5. Show concise conclusion and save diagnostic JSON inside the app; export using **Save diagnostic JSON to a file**.
+The STOP button remains available for user safety. No settings, CID choices, repeated retries or additional actions are required to gather the available evidence.
 
-**Why change this?** The public Bosch eBike HIM document explicitly warns that old software CIDs (`3A/3B/3C` as *the old request/reply mapping*) may no longer be valid and reports BUI responses to `3A` in the observed newer CID mapping. A 4.3 auto-run used the old `3C` example as a default and reported `00 FF`. Earlier manual tests of BUI `3A` also gave `00 FF`, so this update does **not** claim to solve the missing Bosch proprietary session/routing layer. It removes misleading redundant handshake permutations and produces a more targeted diagnostic artifact.
+## What is and is not solved
 
-## Verified hardware observations (screenshots from 23 October 2026)
+The user-observed USB handshake `00 00 03 03 02 01` → `00 01 02` establishes **USB transport negotiation only**, not an ECU session. User's prior read attempts received `00 FF`, even after testing the optional empty frame, an experimental TesterPresent, the current BUI CID, and a historic BMS DID. The **exact cause** of `00 FF` is not documented. It could reflect missing proprietary Sliding Window A session handling, routing or packet state. This app does **not** invent a successful Bosch heartbeat, ECU response or access key, and it does not perform a blind brute-force CID sweep. Solving the proprietary layer needs a captured successful **BES2** diagnostic exchange or additional verified reverse-engineering evidence.
 
-- HID interrupt IN `0x81`, OUT `0x01`, 64-byte reports, no report ID in 29-byte HID descriptor.
-- `321` → `00 01 02` (Sliding Window A); `213` → `00 01 02`; `123` → `00 01 01` (Legacy).
-- Direct BUI CID `3A` DID `0220` and published legacy BMS CID `3C` DID `F130` returned raw `00 FF`.
-- Passive receive previously saw no unsolicited HID traffic; longer capture helps test whether this persists.
-- User confirmed controller mounted and bike switched on while testing.
+## Safety and privacy
 
-`00 FF` is not a validated UDS Negative Response, does not prove the CID is wrong, and cannot identify whether missing frame state, routing, initialization, or session establishment caused the error. An original successful **BES2** USB capture would be required to reproduce unknown proprietary handshake/heartbeat traffic accurately. Do not try brute-force CIDs, security unlocks, write commands or firmware changes.
+Read-only requests only; no SecurityAccess, firmware flashing, resets, configuration or speed-limit changes. Reports can contain serials and raw identifiers, so review/redact before sharing or uploading. Windows-specific Wireshark/USBPcap capture is a separate workflow and cannot be transparently run on the Android tablet.
 
-## Safety
+### Build and download
 
-No parameter writes, UDS SecurityAccess, resets, firmware flashing or speed-limit modifications. No random or high-volume probing. Use only on your own bike, stationary. Exports can contain identifiers and serial data: redact before sharing.
+Open the latest successful APK workflow run on GitHub branch `bosch-usb-tablet`, download the artifact `Bosch-BES2-Diagnostic-APK`, extract and install the APK. The CI includes pure Java protocol tests. Because Android debug APKs are unsigned by a commercial publisher, install only from the connected source you trust; never disable Android malware protection just to force an installation.
 
-## Download & source
-
-Open the latest successful **Bosch BES2 Android APK** GitHub Actions run on branch `bosch-usb-tablet`, download the `Bosch-BES2-Diagnostic-APK` artifact, extract and install the debug APK. This uses Android's `USB Host` API and does not require internet or permissions beyond USB device access.
-
-Source reference: https://de.scribd.com/document/810278403/bosch (sections *Handshake*, *Erste Anfrage*, *Daten / Request*, *Geräte*).
-
-**Privacy:** Diagnostic JSON contains raw USB data and may include device identifiers/serials. Review and redact before posting.
+Reference: [Bosch eBike HIM (research document)](https://de.scribd.com/document/810278403/bosch), sections *Handshake*, *Erste Anfrage*, *Daten*.
