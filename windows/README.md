@@ -1,20 +1,31 @@
-# Bosch BES2 Windows One-Button Diagnostic
+# Bosch BES2 Windows: подтверждённое чтение Intuvia
 
-Windows 10/11 x64. Native Windows HID 108C:0155, .NET 8 WinForms/HidSharp. No Python, no Android and no replacement USB driver.
+23.10.2026 на физическом Intuvia `108C:0155` получен ответ `62 02 20 05 09 02 00`: **версия ПО 5.9.2.0**. Исправлены начальный sequence SWA и смещение CAN-записи. [Техническое исследование](BES2-TRANSPORT-FINDINGS.md).
 
-## Use
-1. Turn on the stationary BES2 bike, keep Intuvia installed, connect a USB **data** cable to Windows.
-2. Run **BoschBES2Auto.exe** and press **ЗАПУСТИТЬ ВСЁ** once.
-3. The app finds the device, checks the measured 65-byte Windows HID report structure (64 payload + Report ID 0), sends one confirmed 321 USB handshake, receives passively for 3 seconds, then issues **one read-only** CID 3A DID 0220 query.
-4. The complete JSON report saves **automatically** into **Downloads/Bosch-BES2/**. Click **ПАПКА ОТЧЁТОВ** to see it. No extra save prompts.
+Запустите **BoschBES2Auto.exe** и нажмите **ЗАПУСТИТЬ АВТОМАТИЧЕСКУЮ ДИАГНОСТИКУ**. Программа проверит USB, согласует режим, выполнит одно чтение BUI и сохранит JSON в `reports/` рядом с EXE. Одна кнопка выполняет один сеанс; после ответа поток закрывается. Python и отдельно установленный .NET для самостоятельного EXE не требуются.
 
-IMPORTANT: Android tests on October 23, 2026 confirmed USB handshake 00 01 02 and raw 00 FF for custom read packets. 00 FF is a transport-level rejection whose specific meaning is **not known**; the app will not attempt random CID brute force, ECU security access, speed-limit editing, programming or firmware changes. Windows does **not** automatically solve Bosch's unpublished Sliding Window A state/routing/heartbeat. A trace of a working legitimate BES2 diagnostic session is needed to establish the missing protocol.
+В интерфейсе есть остановка, HEX/API-лог, уровни USB/транспорт/сессия/ECU, выбор задержки 0–3000 мс и сравнение JSON. Запись параметров, сбросы, SecurityAccess, команды движения и перебор адресов отсутствуют. Текущий подтверждённый объём — версия ПО BUI; двигатель и батарея пока не проверяются.
 
-## Download
+## Командная строка
 
-GitHub Actions > **Bosch BES2 Windows EXE** > latest successful run > artifact **Bosch-BES2-Windows-EXE** > unzip > run **BoschBES2Auto.exe**. The unsigned executable might trigger Windows SmartScreen. Do **not** disable antivirus or bypass a malware warning; check the source and report/scan the file first.
+```
+BoschBES2Auto.exe --enumerate --report-dir C:\Reports
+BoschBES2Auto.exe --probe --delay-ms 0 --report-dir C:\Reports
+```
 
-Raw USB log may contain serial numbers and identifiers. Redact before sending to others.
+`--enumerate` не открывает поток и не пишет в устройство. `--probe` отправляет handshake и не более одного известного запроса чтения. Коды выхода: 0 — перечисление/подтверждённое чтение; 2 — неверные аргументы; 3 — чтение не подтверждено; 4 — ошибка сохранения; 130 — отмена.
 
-Build: dotnet publish windows/BoschBES2Auto/BoschBES2Auto.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-Tests: dotnet run --project windows/BoschBES2.Tests/BoschBES2.Tests.csproj
+Это GUI EXE: для автоматизации из PowerShell используйте `Start-Process -Wait -PassThru` с перенаправлением stdout/stderr. Именно этот способ проверен на готовом самостоятельном EXE; отображение Console.WriteLine и Ctrl+C в обычной интерактивной консоли не гарантируется. В интерфейсе отмена доступна кнопкой СТОП.
+
+## Сборка и тесты
+
+```
+dotnet run --project windows/BoschBES2.Tests -c Release
+dotnet run --project windows/BoschDiagnostic.Tests -c Release
+dotnet run --project windows/BoschSniffer.Tests -c Release
+dotnet publish windows/BoschBES2Auto -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -o windows-dist
+```
+
+Workflow **Bosch BES2 Windows EXE** собирает оба EXE и запускает три набора тестов. Артефакт: **Bosch-BES2-Windows-USBPcap-Sniffer**. Сниффер требует отдельно установленный USBPcap; тестирование реального захвата в этом исследовании не выполнено, поскольку драйвер не установлен.
+
+Полные отчёты могут содержать идентификаторы и остаток USB-буфера. Программа сохраняет их локально; перед публикацией нужна проверка. Публичные тестовые фикстуры очищены от хвоста реальной памяти.

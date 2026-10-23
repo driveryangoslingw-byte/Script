@@ -21,6 +21,8 @@ jobs:
         run: dotnet run --project windows/BoschBES2.Tests/BoschBES2.Tests.csproj --configuration Release
       - name: Run USBPcap PCAP decoder tests
         run: dotnet run --project windows/BoschSniffer.Tests/BoschSniffer.Tests.csproj --configuration Release
+      - name: Run bounded diagnostic session tests (offline HID)
+        run: dotnet run --project windows/BoschDiagnostic.Tests/BoschDiagnostic.Tests.csproj --configuration Release
       - name: Publish both Windows x64 EXEs
         shell: pwsh
         run: |

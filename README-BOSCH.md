@@ -1,5 +1,7 @@
 # Bosch BES2 USB Investigation 4.5 — one button
 
+**Windows update, 2026-10-23:** [the Windows implementation](windows/README.md) now reads Intuvia software 5.9.2.0 from a real BES2 BUI. Incorrect initial SWA sequence and CAN-record offset caused the previous failure. [Investigation and evidence](windows/BES2-TRANSPORT-FINDINGS.md). The Android implementation below remains historical and has not received these transport fixes.
+
 This native Android app is for the older Bosch BES2 Intuvia USB HID device `108C:0155`. BES3 is a different platform.
 
 ## How to use (one action)

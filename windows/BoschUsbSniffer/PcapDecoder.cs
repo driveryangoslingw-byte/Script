@@ -39,7 +39,6 @@ public static class PcapDecoder
         if ((U32(global.AsSpan(20, 4)) & 0xFFFF) != 249)
             throw new InvalidDataException("The capture is not USBPcap (linktype must be 249).");
         var frames = new List<UsbFrame>();
-        var candidateIndices = new HashSet<int>();
         var boschDevices = new HashSet<string>();
         int total = 0, invalid = 0;
         bool partial = false;
@@ -90,8 +89,9 @@ public static class PcapDecoder
     {
         candidate = false;
         descriptor = false;
-        // Device descriptor: bLength=18, bDescriptorType=1, idVendor/idProduct at +8/+10
-        for (int offset = 0; offset <= Math.Min(9, bytes.Length - 12); offset++)
+        // Device descriptors arrive on control transfers. Require the full
+        // 18-byte descriptor before associating every packet of a USB device.
+        for (int offset = 0; transfer == 2 && offset <= Math.Min(9, bytes.Length - 18); offset++)
         {
             if (bytes[offset] == 18 && bytes[offset + 1] == 1 &&
                 bytes[offset + 8] == 0x8C && bytes[offset + 9] == 0x10 &&
@@ -101,8 +101,9 @@ public static class PcapDecoder
                 return "Bosch USB descriptor VID:PID 108C:0155";
             }
         }
-        // HID 65-byte report carries leading Report ID 00, USB payload itself may be 64 or 65 bytes.
-        int start = bytes.Length >= 65 && bytes[0] == 0 ? 1 : 0;
+        // Support the observed 64-byte USB payload and explicitly sized
+        // 65-byte API-style imports carrying the leading Report ID 00.
+        int start = bytes.Length == 65 && bytes[0] == 0 ? 1 : 0;
         var span = bytes.AsSpan(start);
         if (span.Length >= 6 && span[0] == 0 && span[1] == 0 &&
             span[2] == 3 && span[3] == 3 && span[4] == 2 && span[5] == 1)
@@ -120,11 +121,25 @@ public static class PcapDecoder
             candidate = true;
             return "BES2 transport 00 FF candidate (not decoded)";
         }
-        if (span.Length >= 16 && span[0] == 2 && span[2] == 7 &&
-            span[4] == 0xFF && span[5] == 0xFF)
+        // These signatures are candidates only. Only a complete USB device
+        // descriptor above associates the whole bus/device with VID/PID.
+        if (span.Length == 64 && span[0] == 2 && span[1] == 0 &&
+            span[2] == 0 && span[3] == 0 && span[8] == 0)
         {
-            candidate = true;
-            return "BES2 speculative framed packet; CID " + span[10].ToString("X2");
+            if (span[4] == 0xFF && span[5] == 0xFF && span[6] == 11 && span[7] == 0 &&
+                span[9] == 0x3A && span[10] == 4 && span[11] == 3 &&
+                span[12] == 0x22 && span[13] == 2 && span[14] == 0x20)
+            {
+                candidate = true;
+                return "BES2 initial SWA BUI DID 0220 request candidate (firmware-derived layout)";
+            }
+            if (span[6] == 2 && span[7] == 1 && span[9] == 0x3D &&
+                span[10] == 8 && span[11] == 7 && span[12] == 0x62 &&
+                span[13] == 2 && span[14] == 0x20)
+            {
+                candidate = true;
+                return "BES2 initial SWA BUI software reply candidate (observed layout; tail ignored)";
+            }
         }
         return transfer == 2 ? "USB control transfer" : "";
     }

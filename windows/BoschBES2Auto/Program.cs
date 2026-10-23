@@ -1,221 +1,216 @@
-using HidSharp;
-using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.IO;
-using System.Linq;
 using System.Diagnostics;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Forms;
 
 namespace BoschBES2Auto;
 
 internal static class Program
 {
- [STAThread] static void Main() {
-  ApplicationConfiguration.Initialize();
-  Application.Run(new DiagnosticWindow());
- }
+    public static string ReportsFolder => Path.Combine(AppContext.BaseDirectory, "reports");
+
+    [STAThread]
+    static int Main(string[] args)
+    {
+        if (args.Length > 0) return RunCommandLine(args);
+        ApplicationConfiguration.Initialize();
+        Application.Run(new DiagnosticWindow());
+        return 0;
+    }
+
+    private static int RunCommandLine(string[] args)
+    {
+        try
+        {
+            bool enumerate = false, probe = false;
+            int delay = 0;
+            string directory = ReportsFolder;
+            for (int i = 0; i < args.Length; i++)
+            {
+                switch (args[i])
+                {
+                    case "--enumerate": enumerate = true; break;
+                    case "--probe": probe = true; break;
+                    case "--delay-ms" when i + 1 < args.Length:
+                        if (!int.TryParse(args[++i], out delay) || delay < 0 || delay > 3000)
+                            throw new ArgumentException("--delay-ms: expected 0..3000.");
+                        break;
+                    case "--report-dir" when i + 1 < args.Length: directory = Path.GetFullPath(args[++i]); break;
+                    case "--help":
+                        Console.WriteLine("BoschBES2Auto --enumerate | --probe [--delay-ms 0..3000] [--report-dir PATH]");
+                        return 0;
+                    default: throw new ArgumentException("Unknown or incomplete argument: " + args[i]);
+                }
+            }
+            if (enumerate == probe) throw new ArgumentException("Specify exactly one of --enumerate or --probe.");
+            using var cancel = new CancellationTokenSource();
+            ConsoleCancelEventHandler handler = (_, e) => { e.Cancel = true; cancel.Cancel(); };
+            Console.CancelKeyPress += handler;
+            try
+            {
+                var result = new DiagnosticRunner().Run(new DiagnosticOptions {
+                    EnumerateOnly = enumerate, HandshakeDelayMs = delay, ReportDirectory = directory
+                }, cancel.Token, Console.WriteLine);
+                Console.WriteLine($"OUTCOME={result.Outcome}; USB={result.UsbStatus}; HANDSHAKE={result.HandshakeStatus}; VERIFIED_ECU_VALUES={result.VerifiedEcuValues}");
+                Console.WriteLine("REPORT_FILE=" + result.ReportFile);
+                if (result.ReportSaveError != null) { Console.Error.WriteLine(result.ReportSaveError); return 4; }
+                return result.Outcome is "ENUMERATION_ONLY" or "BUI_SOFTWARE_VERSION_READ" ? 0 : result.Outcome == "CANCELLED" ? 130 : 3;
+            }
+            finally { Console.CancelKeyPress -= handler; }
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 2; }
+    }
 }
+
 public sealed class DiagnosticWindow : Form
 {
- private readonly Button start=new(), stop=new(), reports=new();
- private readonly TextBox logbox=new();
- private readonly Label status=new();
- private readonly object gate=new();
- private readonly List<object> frames=new(), steps=new();
- private readonly List<string> lines=new();
- private CancellationTokenSource? cancel;
- private bool running;
- private string? reportFile;
+    private readonly Button start = new(), stop = new(), reports = new();
+    private readonly Label state = new(), levels = new();
+    private readonly TextBox logbox = new(), comparison = new();
+    private readonly NumericUpDown delay = new() { Minimum = 0, Maximum = 3000, Value = 0, Width = 110 };
+    private CancellationTokenSource? cancellation;
+    private Task? activeRun;
 
- public DiagnosticWindow() {
-  Text="Bosch BES2 — Windows Auto Diagnostic";
-  MinimumSize=new Size(790,530);Size=new Size(1070,740);
-  StartPosition=FormStartPosition.CenterScreen;
-  BackColor=Color.FromArgb(11,23,39);ForeColor=Color.White;
-  Font=new Font("Segoe UI",10);
-  var main=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(20),RowCount=5,ColumnCount=1};
-  main.RowStyles.Add(new RowStyle(SizeType.Absolute,55));
-  main.RowStyles.Add(new RowStyle(SizeType.Absolute,40));
-  main.RowStyles.Add(new RowStyle(SizeType.Absolute,78));
-  main.RowStyles.Add(new RowStyle(SizeType.Absolute,67));
-  main.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-  var heading=new Label{Text="BOSCH BES2  /  WINDOWS ONE-CLICK DIAGNOSTICS",Dock=DockStyle.Fill,
-   Font=new Font("Segoe UI",18,FontStyle.Bold),ForeColor=Color.FromArgb(127,209,252)};
-  heading.TextAlign=ContentAlignment.MiddleLeft;main.Controls.Add(heading,0,0);
-  main.Controls.Add(new Label{Text="Intuvia · HID 108C:0155 · только чтение, без разблокировки и изменения настроек",
-   Dock=DockStyle.Fill,ForeColor=Color.LightSteelBlue},0,1);
-  var row=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1};
-  row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,60));
-  row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,16));
-  row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,24));
-  Setup(start,"▶  ЗАПУСТИТЬ ВСЁ",Color.FromArgb(29,126,186));
-  Setup(stop,"■  СТОП",Color.FromArgb(79,90,106));
-  Setup(reports,"ПАПКА ОТЧЁТОВ",Color.FromArgb(39,71,94));
-  stop.Enabled=false;
-  start.Click+=(_,_)=>StartRun();
-  stop.Click+=(_,_)=>{cancel?.Cancel();Say("STOP запрошен");};
-  reports.Click+=(_,_)=>OpenReports();
-  row.Controls.Add(start,0,0);row.Controls.Add(stop,1,0);row.Controls.Add(reports,2,0);
-  main.Controls.Add(row,0,2);
-  status.Text="Включи велосипед с Intuvia, подключи кабель данных к Windows и нажми ЗАПУСТИТЬ.";
-  status.ForeColor=Color.Khaki;status.Dock=DockStyle.Fill;
-  status.TextAlign=ContentAlignment.MiddleLeft;
-  main.Controls.Add(status,0,3);
-  logbox.ReadOnly=true;logbox.Multiline=true;logbox.ScrollBars=ScrollBars.Both;
-  logbox.WordWrap=false;logbox.Dock=DockStyle.Fill;
-  logbox.Font=new Font("Consolas",10);
-  logbox.BackColor=Color.FromArgb(8,27,47);logbox.ForeColor=Color.FromArgb(175,222,247);
-  main.Controls.Add(logbox,0,4);Controls.Add(main);
-  Say("BES2 Windows 1.0. Одно нажатие: HID -> handshake -> 3s passive -> 1 read-only request -> JSON.");
-  Say("Windows HID использует байт Report ID=0 перед 64-байтным сообщением Bosch.");
-  Say("Ответ 00 FF пока не расшифрован. Программа не будет перебирать случайные CID.");
- }
- private static void Setup(Button b,string title,Color color) {
-  b.Text=title;b.Dock=DockStyle.Fill;b.Margin=new Padding(4,10,4,10);
-  b.BackColor=color;b.ForeColor=Color.White;b.FlatStyle=FlatStyle.Flat;
-  b.FlatAppearance.BorderSize=0;b.Font=new Font("Segoe UI",11,FontStyle.Bold);
- }
- private void UI(Action a) {
-  try {if(!IsDisposed&&IsHandleCreated)BeginInvoke(a);}catch(InvalidOperationException){}
- }
- private void Say(string s) {
-  string line=$"[{DateTime.Now:HH:mm:ss}] {s}";
-  lock(gate){lines.Add(line);}
-  UI(()=>{logbox.AppendText(line+Environment.NewLine);logbox.SelectionStart=logbox.TextLength;logbox.ScrollToCaret();});
- }
- private void State(string s){Say(s);UI(()=>status.Text=s);}
- private void Step(string name,string result) {
-  lock(gate){steps.Add(new {name,result});}
-  Say($"RESULT {name}: {result}");
- }
- private void Trace(string direction,string name,byte[] b) {
-  string hex=Protocol.Hex(b);
-  lock(gate){frames.Add(new {at=DateTimeOffset.Now.ToString("O"),direction,name,hex});}
-  Say($"{direction} {name}: {hex}");
- }
- private void StartRun() {
-  if(running)return;
-  running=true;cancel=new CancellationTokenSource();reportFile=null;
-  lock(gate){frames.Clear();steps.Clear();lines.Clear();}
-  logbox.Clear();start.Enabled=false;stop.Enabled=true;
-  var token=cancel.Token;
-  State("Шаг 1/4: ищу Bosch USB HID 108C:0155...");
-  _=Task.Run(()=>Diagnose(token)).ContinueWith(t=>UI(()=>{
-   running=false;start.Enabled=true;stop.Enabled=false;
-   cancel?.Dispose();cancel=null;
-   if(t.IsFaulted)State("Неожиданная ошибка: "+t.Exception?.GetBaseException().Message);
-  }));
- }
- private static bool TimedOut(Exception e) => e is TimeoutException ||
-  (e is IOException && (e.Message.Contains("timeout",StringComparison.OrdinalIgnoreCase) ||
-                         e.Message.Contains("timed out",StringComparison.OrdinalIgnoreCase)));
- private byte[] Exchange(HidStream stream,HidDevice device,byte[] raw,string name,CancellationToken token) {
-  token.ThrowIfCancellationRequested();
-  var packet=Protocol.ToWindowsReport(raw,device.GetMaxOutputReportLength());
-  Trace("OUT_USB64",name,raw);
-  stream.WriteTimeout=1600;stream.Write(packet,0,packet.Length);
-  stream.ReadTimeout=1900;
-  var input=new byte[device.GetMaxInputReportLength()];
-  int n=stream.Read(input,0,input.Length);
-  var reply=Protocol.FromWindowsReport(input,n);
-  Trace("IN_USB64",name,reply);
-  return reply;
- }
- private void Diagnose(CancellationToken token) {
-  string outcome="Incomplete";
-  try {
-   var devices=DeviceList.Local.GetHidDevices(Protocol.Vid,Protocol.Pid).ToList();
-   Step("USB enumeration","Matching HID interfaces: "+devices.Count);
-   if(devices.Count==0)throw new Exception("Bosch HID 108C:0155 не найден. Проверь USB кабель, питание Intuvia и Диспетчер устройств Windows.");
-   HidDevice? chosen=null;HidStream? stream=null;
-   foreach(var d in devices) {
-    token.ThrowIfCancellationRequested();
-    int il=d.GetMaxInputReportLength(),ol=d.GetMaxOutputReportLength();
-    Say($"Windows HID interface IN={il}, OUT={ol} bytes (including Report ID).");
-    if(il!=65||ol!=65){Say("Interface skipped: not the observed 64-byte HID reports.");continue;}
-    if(d.TryOpen(out HidStream opened)){chosen=d;stream=opened;break;}
-    Say("Cannot open this interface; another software instance may be holding it.");
-   }
-   if(chosen==null||stream==null)throw new Exception("Не удалось открыть HID 65 байт. Закрой другие программы, работающие с велосипедом.");
-   using(stream) {
-    Step("USB HID","CONNECTED; no custom driver installed");
-    State("Шаг 2/4: handshake 321...");
-    byte[] handshake=Exchange(stream,chosen,Protocol.Handshake(),"HandShake 321",token);
-    string mode=Protocol.HandshakeResult(handshake);
-    Step("Handshake",mode);
-    if(mode!="HANDSHAKE_SLIDING_WINDOW_A")throw new Exception("Handshake не подтвердил Sliding Window A; запросов ECU не отправлял.");
-    Say("Transport handshake confirmed. Bosch ECU session and CAN routing are NOT verified.");
-    State("Шаг 3/4: пассивный приём USB 3 секунды...");
-    int passive=0;
-    for(int i=0;i<4;i++) {
-     token.ThrowIfCancellationRequested();
-     stream.ReadTimeout=750;
-     var buffer=new byte[chosen.GetMaxInputReportLength()];
-     try {
-      int n=stream.Read(buffer,0,buffer.Length);
-      byte[] packet=Protocol.FromWindowsReport(buffer,n);
-      Trace("IN_PASSIVE","window "+(i+1),packet);passive++;
-     }catch(Exception e) when(TimedOut(e)) {Say($"Passive {i+1}/4: no incoming report.");}
+    public DiagnosticWindow()
+    {
+        Text = "Bosch BES2 — исследование USB и диагностика";
+        MinimumSize = new Size(900, 650); Size = new Size(1200, 800);
+        StartPosition = FormStartPosition.CenterScreen;
+        BackColor = Color.FromArgb(15, 26, 40); ForeColor = Color.White;
+        Font = new Font("Segoe UI", 10);
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 1, RowCount = 6 };
+        foreach (int height in new[] { 52, 76, 42, 65, 48 }) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.Controls.Add(new Label { Text = "BOSCH BES2 · USB-ДИАГНОСТИКА", Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 19, FontStyle.Bold), ForeColor = Color.LightSkyBlue }, 0, 0);
+        var buttons = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3 };
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 68));
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 12));
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+        Style(start, "ЗАПУСТИТЬ АВТОМАТИЧЕСКУЮ ДИАГНОСТИКУ", Color.FromArgb(25, 112, 172));
+        Style(stop, "СТОП", Color.FromArgb(90, 70, 75));
+        Style(reports, "ПАПКА ОТЧЁТОВ", Color.FromArgb(42, 72, 91));
+        stop.Enabled = false;
+        start.Click += (_, _) => StartRun();
+        stop.Click += (_, _) => { cancellation?.Cancel(); state.Text = "Останавливаю сеанс и сохраняю отчёт…"; };
+        reports.Click += (_, _) => {
+            try { Directory.CreateDirectory(Program.ReportsFolder); Process.Start(new ProcessStartInfo("explorer.exe", Program.ReportsFolder) { UseShellExecute = true }); }
+            catch (Exception ex) { state.Text = ex.Message; }
+        };
+        buttons.Controls.Add(start, 0, 0); buttons.Controls.Add(stop, 1, 0); buttons.Controls.Add(reports, 2, 0);
+        layout.Controls.Add(buttons, 0, 1);
+        levels.Text = "USB: не проверен     Handshake: не проверен     Сессия: не установлена     ECU: 0 значений";
+        levels.Dock = DockStyle.Fill; levels.ForeColor = Color.LightSteelBlue;
+        layout.Controls.Add(levels, 0, 2);
+        state.Text = "Готов. Программа прочитает версию ПО Intuvia и сохранит результаты проверки.";
+        state.Dock = DockStyle.Fill; state.ForeColor = Color.Khaki;
+        layout.Controls.Add(state, 0, 3);
+        layout.Controls.Add(new Label { Text = "Intuvia 108C:0155 · один handshake и один запрос чтения · без изменения настроек\nПроверяется BUI. Диагностика мотора и аккумулятора пока не реализована.", Dock = DockStyle.Fill }, 0, 4);
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        var logTab = new TabPage("HEX и события API") { BackColor = BackColor };
+        PrepareText(logbox); logTab.Controls.Add(logbox); tabs.TabPages.Add(logTab);
+        var research = new TabPage("Исследование и сравнение") { BackColor = BackColor };
+        var researchLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(10) };
+        researchLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        researchLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        researchLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var settings = new FlowLayoutPanel { Dock = DockStyle.Fill };
+        settings.Controls.Add(new Label { Text = "Задержка после handshake, мс:", AutoSize = true, Padding = new Padding(0, 5, 0, 0) });
+        settings.Controls.Add(delay);
+        var compare = new Button { Text = "Сравнить JSON…", AutoSize = true };
+        compare.Click += (_, _) => CompareReports(); settings.Controls.Add(compare);
+        researchLayout.Controls.Add(settings, 0, 0);
+        researchLayout.Controls.Add(new Label { Text = "Выбранная задержка применяется к следующему запуску. Автоматического перебора нет.\nЛог содержит вызовы HidSharp, а фактический тип USB-транзакции требует отдельного USBPcap-захвата.", Dock = DockStyle.Fill }, 0, 1);
+        PrepareText(comparison); researchLayout.Controls.Add(comparison, 0, 2);
+        research.Controls.Add(researchLayout); tabs.TabPages.Add(research);
+        layout.Controls.Add(tabs, 0, 5); Controls.Add(layout);
     }
-    Step("Passive capture",passive+" unsolicited frames");
-    token.ThrowIfCancellationRequested();
-    State("Шаг 4/4: однократное чтение BUI CID 3A / DID 0220...");
-    byte[] response=Exchange(stream,chosen,Protocol.ReadBui(),"BUI 3A / UDS 22 02 20",token);
-    string result=Protocol.ReadResult(response);
-    Step("BUI read",result);
-    outcome=result=="TRANSPORT_00_FF_UNDECODED"
-      ? "USB подключён, handshake OK, но Bosch вернул 00 FF. Ошибка транспорта НЕ расшифрована. Нужен USB-захват рабочего диагностического сеанса BES2, а не перебор команд."
-      : result=="DID_REPLY_CANDIDATE_UNVERIFIED"
-       ? "Пришёл возможный ответ DID. Его структура и ECU-источник пока не проверены."
-       : "Ответ "+result+". Подтверждённых значений ECU нет, остановка без повторных запросов.";
-   }
-  } catch(OperationCanceledException) {
-   outcome="Остановлено пользователем.";
-  } catch(Exception e) {
-   outcome="Остановка: "+e.Message;
-  } finally {
-   Step("FINAL",outcome);
-   string? path=SaveReport(outcome);reportFile=path;
-   State(outcome);
-   if(path!=null)Say("ФАЙЛ СОХРАНЁН: "+path);
-   Say("Никаких записей, ресетов, перепрошивки и изменения ограничений скорости.");
-  }
- }
- private static string ReportsFolder() {
-  string downloads=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"Downloads","Bosch-BES2");
-  try{Directory.CreateDirectory(downloads);return downloads;}
-  catch{
-   string fallback=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"BoschBES2Auto","Reports");
-   Directory.CreateDirectory(fallback);return fallback;
-  }
- }
- private string? SaveReport(string outcome) {
-  try {
-   string path=Path.Combine(ReportsFolder(),$"bosch-bes2-win-{DateTime.Now:yyyyMMdd-HHmmss-fff}.json");
-   string json;
-   lock(gate){
-    json=JsonSerializer.Serialize(new {
-     app="Bosch BES2 Windows One-Tap 1.0",time_utc=DateTimeOffset.UtcNow,vid_pid="108C:0155",
-     bosch_heartbeat_implemented=false,verified_ecu_values=0,outcome,
-     warning="Raw frames may contain serial identifiers. Redact before sharing.",
-     steps=steps.ToArray(),trace=frames.ToArray(),log=lines.ToArray()
-    },new JsonSerializerOptions{WriteIndented=true});
-   }
-   File.WriteAllText(path,json);return path;
-  }catch(Exception e){Say("ERROR saving JSON: "+e.Message);return null;}
- }
- private void OpenReports() {
-  try {
-   string path=reportFile==null?ReportsFolder():Path.GetDirectoryName(reportFile)!;
-   Process.Start(new ProcessStartInfo("explorer.exe",path){UseShellExecute=true});
-  } catch(Exception e){State("Невозможно открыть папку: "+e.Message);}
- }
- protected override void OnFormClosing(FormClosingEventArgs e) {
-  if(running){cancel?.Cancel();e.Cancel=true;State("Прерываю тест и сохраняю отчёт; закрой окно после завершения.");return;}
-  base.OnFormClosing(e);
- }
+
+    private static void Style(Button button, string text, Color color)
+    {
+        button.Text = text; button.Dock = DockStyle.Fill; button.Margin = new Padding(4, 6, 4, 6);
+        button.BackColor = color; button.ForeColor = Color.White; button.FlatStyle = FlatStyle.Flat;
+        button.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+    }
+
+    private static void PrepareText(TextBox box)
+    {
+        box.Multiline = true; box.ReadOnly = true; box.WordWrap = false; box.ScrollBars = ScrollBars.Both;
+        box.Dock = DockStyle.Fill; box.Font = new Font("Consolas", 10);
+        box.BackColor = Color.FromArgb(8, 22, 35); box.ForeColor = Color.LightSkyBlue;
+    }
+
+    private void AppendLog(string line)
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        try { BeginInvoke(() => logbox.AppendText(line + Environment.NewLine)); } catch (InvalidOperationException) { }
+    }
+
+    private async void StartRun()
+    {
+        if (activeRun is { IsCompleted: false }) return;
+        start.Enabled = false; stop.Enabled = true; delay.Enabled = false; logbox.Clear();
+        cancellation = new CancellationTokenSource();
+        state.Text = "Проверяю USB, согласовываю режим и выполняю один запрос чтения…";
+        var options = new DiagnosticOptions { HandshakeDelayMs = (int)delay.Value, ReportDirectory = Program.ReportsFolder };
+        try
+        {
+            var run = Task.Run(() => new DiagnosticRunner().Run(options, cancellation.Token, AppendLog));
+            activeRun = run;
+            var result = await run;
+            levels.Text = result.VerifiedEcuValues > 0
+                ? $"USB: подключён     Транспорт: Sliding Window A     Сессия: ответ подтверждён     BUI: {result.VerifiedEcuValues} значение"
+                : $"USB: {result.UsbStatus}     Handshake: {result.HandshakeStatus}     Сессия: {result.SessionStatus}     ECU: 0";
+            state.Text = result.Outcome switch {
+                "BUI_SOFTWARE_VERSION_READ" => "Успешно прочитана версия ПО Intuvia: " + string.Join(", ", result.Values.Select(value => value.Value)) + ". Отчёт сохранён.",
+                "TRANSPORT_ERROR_00_FF" => "Получен 00 FF. Значение ошибки не расшифровано; чтение ECU не подтверждено. Сеанс закрыт.",
+                "NO_DEVICE" => "Bosch 108C:0155 не найден.",
+                "CANCELLED" => "Остановлено. Новые запросы не отправляются.",
+                "SESSION_ALREADY_RUNNING" => "Другой экземпляр программы выполняет проверку. Новый сеанс не запускался.",
+                "UNVERIFIED_FRAMES_OBSERVED" => "Получены кадры. Корректность диагностического ответа и источник ECU ещё не подтверждены.",
+                _ => $"Проверка завершена: {result.Outcome}. Подтверждённых значений ECU: 0."
+            };
+            if (result.ReportSaveError != null) state.Text += " Ошибка сохранения: " + result.ReportSaveError;
+            else AppendLog("Отчёт: " + result.ReportFile);
+        }
+        catch (Exception ex) { state.Text = "Ошибка выполнения: " + ex.Message; }
+        finally { activeRun = null; cancellation.Dispose(); cancellation = null; start.Enabled = true; stop.Enabled = false; delay.Enabled = true; }
+    }
+
+    private void CompareReports()
+    {
+        using var picker = new OpenFileDialog { Filter = "Отчёты JSON|*.json", Multiselect = true, InitialDirectory = Program.ReportsFolder };
+        if (picker.ShowDialog(this) != DialogResult.OK) return;
+        comparison.Clear();
+        foreach (string path in picker.FileNames)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
+                var root = document.RootElement;
+                string Value(string key) => root.TryGetProperty(key, out var value) ? value.ToString() : "—";
+                comparison.AppendText($"{Path.GetFileName(path)}\r\n  Итог: {Value("outcome")}\r\n  Задержка: {Value("handshake_delay_ms")} мс; ECU: {Value("verified_ecu_values")}\r\n");
+                if (root.TryGetProperty("events", out var events))
+                {
+                    double? handshakeAt = null, requestAt = null, responseAt = null;
+                    foreach (var entry in events.EnumerateArray())
+                    {
+                        if (!entry.TryGetProperty("operation", out var operation) || !entry.TryGetProperty("stage", out var stage)) continue;
+                        double ms = entry.GetProperty("elapsed_ms").GetDouble();
+                        if (operation.GetString() == "read_completed" && stage.GetString() == "handshake") handshakeAt = ms;
+                        if (operation.GetString() == "write_call" && stage.GetString() == "read_bui") requestAt = ms;
+                        if (operation.GetString() == "read_completed" && stage.GetString() == "session" && responseAt == null) responseAt = ms;
+                    }
+                    if (handshakeAt.HasValue && requestAt.HasValue) comparison.AppendText($"  Фактический интервал: {requestAt - handshakeAt:F3} мс\r\n");
+                    if (requestAt.HasValue && responseAt.HasValue) comparison.AppendText($"  Первый IN после запроса: {responseAt - requestAt:F3} мс (связь с запросом отдельно не доказана)\r\n");
+                }
+                comparison.AppendText("\r\n");
+            }
+            catch (Exception ex) { comparison.AppendText(Path.GetFileName(path) + ": " + ex.Message + "\r\n"); }
+        }
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (activeRun is { IsCompleted: false }) { cancellation?.Cancel(); e.Cancel = true; state.Text = "Завершаю USB-сеанс и сохраняю отчёт; затем окно можно закрыть."; return; }
+        base.OnFormClosing(e);
+    }
 }
