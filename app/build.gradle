@@ -6,8 +6,8 @@ android {
   applicationId 'online.wixed.boschusb'
   minSdk 26
   targetSdk 28
-  versionCode 8
-  versionName '4.2'
+  versionCode 9
+  versionName '4.3'
  }
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
