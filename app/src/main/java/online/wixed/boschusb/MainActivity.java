@@ -77,7 +77,7 @@ public final class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33)registerReceiver(usbReceiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(usbReceiver,f);
     buildUI();
-    post("BES2 read-only diagnostic build. USB 108C:0155.");
+    post("BES2 4.0 guided, read-only USB transport diagnostics.");
     post("This is not a speed-unlock tool; device-specific read responses remain unverified.");
   }
   private TextView text(String message,int size,int color){
@@ -96,7 +96,7 @@ public final class MainActivity extends Activity {
     root.setBackgroundColor(0xff0b1424);
     root.setPadding(22,18,22,38);
     scroll.addView(root);
-    TextView head=text("BOSCH BES2  •  DIAGNOSTICS",22,0xff87dcff);
+    TextView head=text("BOSCH BES2  •  TRANSPORT LAB 4.0",22,0xff87dcff);
     head.setTypeface(null,Typeface.BOLD);add(root,head);
     add(root,text("Intuvia / E-Bike HMI 108C:0155 | FREE · OFFLINE",13,0xffacc0d8));
     stateText=text("Not connected",17,0xffffc878);add(root,stateText);
@@ -109,13 +109,13 @@ public final class MainActivity extends Activity {
     profileSpinner.setAdapter(adapter);
     profileSpinner.setBackgroundColor(0xffc8d7ec);
     add(root,profileSpinner);
-    initialCheck=new CheckBox(this);initialCheck.setText("Send optional initial empty frame");
-    initialCheck.setTextColor(0xffe4efff);initialCheck.setChecked(false);add(root,initialCheck);
-    add(root,text("Published BUI CIDs 39, 3A, 5D are research candidates. Motor/BMS CIDs 3B/3C are LEGACY and may not work on your firmware.",12,0xffffd08b));
-    button(root,"3 · Read first DID (safe protocol probe)",()->readData(false));
-    button(root,"4 · Read profile DIDs (stops on transport error)",()->readData(true));
-    button(root,"AUTO · Discover published CIDs (bounded read-only probe)",this::autoDiscover);
-    add(root,text("Tests 7 published CIDs with UDS TesterPresent, then reads a single DID only on a plausible reply. Stops at the first matched DID, after 3 transport rejections, or when you press Stop. This is NOT an authentication brute-force.",12,0xffffd08b));
+    initialCheck=new CheckBox(this);initialCheck.setText("Include first empty frame (published sequence)");
+    initialCheck.setTextColor(0xffe4efff);initialCheck.setChecked(true);add(root,initialCheck);
+    add(root,text("CID values are research candidates, not verified ECU addresses. The original Bosch heartbeat bytes are NOT publicly verified.",12,0xffffd08b));
+    button(root,"3 · Guided handshake / heartbeat / DID",this::guidedRead);
+    button(root,"4 · Passive USB receive (no CID traffic)",this::passiveListen);
+    
+    add(root,text("One CID only, handshake once, optional empty frame, one TesterPresent candidate (not verified original Bosch heartbeat), then one DID only after a framed positive response. Stops immediately on 00 FF. Passive mode sends no diagnostic commands.",12,0xffffd08b));
 
     button(root,"Stop requests",()->{cancel=true;post("Stop requested.");});
     progressText=text("Read: 0 confirmed",14,0xffc9ddf6);add(root,progressText);
@@ -194,7 +194,7 @@ public final class MainActivity extends Activity {
     final String h=Protocol.hex(bytes);
     post(direction+" "+detail+"\n"+h);
     JSONObject row=new JSONObject();
-    try{row.put("direction",direction);row.put("detail",detail);row.put("hex",h);}catch(Exception ignored){}
+    try{row.put("time_ms",System.currentTimeMillis());row.put("direction",direction);row.put("detail",detail);row.put("hex",h);}catch(Exception ignored){}
     synchronized(packetLog){packetLog.add(row);}
   }
   private byte[] exchange(byte[] bytes,String label)throws Exception{
@@ -226,133 +226,99 @@ public final class MainActivity extends Activity {
       updateState("USB handshake confirmed: sliding window A",true);
     }catch(Exception e){updateState("Handshake error: "+e.getMessage(),false);}
   });}
-  private void readData(boolean all){
+
+  /**
+   * Fail-closed flow. We deliberately do not claim that UDS TesterPresent is
+   * the Bosch-specific discovery heartbeat: that wire packet is not verified.
+   * One CID per invocation; no blind CID sweep, writes or security requests.
+   */
+  private void guidedRead(){
     final int profile=profileSpinner.getSelectedItemPosition();
-    final boolean empty=initialCheck.isChecked();
+    final boolean sendEmpty=initialCheck.isChecked();
     startJob(()->{
+      Protocol.Session session=new Protocol.Session();
+      String cid=String.format(Locale.US,"%02X",Protocol.cid(profile));
       try{
-        byte[] h=exchange(Protocol.handshake(),"Handshake before diagnostics");
-        if(!Protocol.summary(h,0).equals("HANDSHAKE_SLIDING_WINDOW_A"))
-          throw new Exception("Handshake rejected: "+Protocol.summary(h,0));
-        int seq=0;
-        if(empty){
-          byte[] a=exchange(Protocol.initial(seq++),"Optional empty initial frame");
-          String result=Protocol.summary(a,0);
-          post("Initial-frame reply: "+result);
-          if(result.equals("TRANSPORT_REJECTED_00_FF"))throw new Exception("00 FF on initial empty frame; try unchecked.");
-        }
-        int cid=Protocol.cid(profile),n=0;int[] ids=Protocol.dids(profile);
-        post("Target: "+Protocol.PROFILES[profile]);
-        for(int did:ids){
-          if(cancel)break;
-          byte[] r=exchange(Protocol.read(cid,did,seq++),"Read DID "+Protocol.didHex(did)+" / CID "+String.format(Locale.US,"%02X",cid));
-          String code=Protocol.summary(r,did);
-          JSONObject result=new JSONObject();
-          result.put("profile",Protocol.PROFILES[profile]);
-          result.put("cid",String.format(Locale.US,"%02X",cid));
-          result.put("did",Protocol.didHex(did));
-          result.put("label",Protocol.label(did));
-          result.put("response",code);
-          result.put("raw",did==0x0242?"redacted in results (see raw trace)":Protocol.hex(r));
-          synchronized(values){values.add(result);}
-          n++;
-          final String row=Protocol.didHex(did)+"  "+Protocol.label(did)+"  → "+code+"\n";
-          ui.post(()->{
-            resultText.append(row);
-            progressText.setText("Tested: "+values.size()+"  •  latest CID: "+String.format(Locale.US,"%02X",cid));
-          });
-          if(code.equals("TRANSPORT_REJECTED_00_FF")){
-            throw new Exception("00 FF: transport/session rejects this query. DID="+Protocol.didHex(did)+", CID="+String.format(Locale.US,"%02X",cid)+". This is NOT a valid setting value.");
+        post("GUIDED BEGIN: candidate CID "+cid+"; empty frame="+sendEmpty+
+          "; original Bosch heartbeat format UNKNOWN; no brute force.");
+        byte[] handshake=exchange(Protocol.handshake(),"Guided step 1 / USB handshake");
+        if(!session.acceptHandshake(handshake))
+          throw new Exception("Step 1: unexpected handshake "+Protocol.transportSummary(handshake));
+        updateState("Step 1 OK: Sliding Window A negotiated (routing unverified)",true);
+        if(sendEmpty){
+          byte[] rx=exchange(session.empty(),"Guided step 2 / published initial empty frame");
+          Protocol.Reply reply=session.checked(rx,0,0);
+          post("Initial frame response: "+reply.status+
+            " / expected sequence next="+session.nextSequence());
+          if(!reply.framed()){
+            updateState("Step 2 STOP: "+reply.status+
+              ". Empty-frame handling is unresolved; do not continue guessing.",false);
+            return;
           }
-          if(!all)break;
+          post("Initial frame resembles a Bosch HMI data envelope; semantics remain unverified.");
+        }else{
+          post("Step 2 skipped by user. Published reference says empty frame can be optional.");
         }
-        updateState((cancel?"Stopped":"Read attempt complete")+" (not all raw replies may be decodable)",!cancel);
-      }catch(Exception e){updateState("Diagnostics stopped: "+e.getMessage(),false);}
+        byte[] rx=exchange(session.tester(Protocol.cid(profile)),
+          "Guided step 3 / UDS TesterPresent candidate / CID "+cid);
+        Protocol.Reply tester=session.checked(rx,0x3E,0);
+        post("TesterPresent: "+tester.status+
+          (tester.framed()?" response-CID="+String.format(Locale.US,"%02X",tester.responseCid):""));
+        if(!"UDS_TESTER_POSITIVE_FRAME_CANDIDATE".equals(tester.status)){
+          updateState("Step 3 STOP: "+tester.status+
+            ". No verified response to this tester/heartbeat candidate.",false);
+          return;
+        }
+        int did=profile<3?0x0220:0xF130;
+        rx=exchange(session.readDid(Protocol.cid(profile),did),
+          "Guided step 4 / one read-only DID "+Protocol.didHex(did)+" / CID "+cid);
+        Protocol.Reply result=session.checked(rx,0x22,did);
+        JSONObject record=new JSONObject();
+        record.put("mode","guided_read_only");
+        record.put("cid",cid);record.put("did",Protocol.didHex(did));
+        record.put("response_cid",result.responseCid);
+        record.put("state",result.status);
+        record.put("raw",Protocol.hex(rx));
+        synchronized(values){values.add(record);}
+        final String resultLine="CID "+cid+", DID "+Protocol.didHex(did)+" → "+
+          result.status+" (transport research candidate)";
+        post(resultLine);
+        ui.post(()->{resultText.append(resultLine+"\\n");
+          progressText.setText("Guided probe complete · "+result.status);});
+        updateState("Step 4: "+result.status+
+          " (no ECU values confirmed until framing is validated)",result.framed());
+      }catch(Exception e){updateState("GUIDED STOP: "+e.getMessage(),false);}
     });
   }
 
   /**
-   * Experimental, bounded discovery of seven documented candidate CIDs.
-   * There is no published byte-level spec for the community's heartbeat query.
-   * The diagnostic TesterPresent service used here is a distinct, standard UDS
-   * request and MUST NOT be reported as confirmed Bosch heartbeat support.
-   * Never enumerate authentication codes or issue configuration writes.
+   * Capture any unsolicited USB IN traffic after handshake. Never sends
+   * TesterPresent, UDS reads or other device-targeted packets.
    */
-  private void autoDiscover(){
+  private void passiveListen(){
     startJob(()->{
-      int tries=0,rejections=0,candidates=0,confirmed=0;
       try{
-        post("AUTO DISCOVERY started: max "+Protocol.DISCOVERY_CIDS.length+
-             " published CID candidates, max "+Protocol.MAX_TRANSPORT_REJECTS+
-             " transport rejects, minimum "+Protocol.MIN_PROBE_DELAY_MS+"ms pause.");
-        updateState("Auto CID discovery: read-only, limited",true);
-        for(int cid:Protocol.DISCOVERY_CIDS){
-          if(cancel)break;
-          if(rejections>=Protocol.MAX_TRANSPORT_REJECTS){
-            post("SAFETY STOP: repeated 00 FF refusals; not a valid CID result.");
-            break;
-          }
-          tries++;
-          String cidStr=String.format(Locale.US,"%02X",cid);
-          final int completed=tries;
-          ui.post(()->progressText.setText("Auto test "+completed+"/"+Protocol.DISCOVERY_CIDS.length+" · CID "+cidStr));
-          // Begin a new transport session before each candidate.
-          byte[] hello=exchange(Protocol.handshake(),"AUTO handshake for CID "+cidStr);
-          String hs=Protocol.summary(hello,0);
-          if(!hs.equals("HANDSHAKE_SLIDING_WINDOW_A")){
-            post("AUTO STOP: handshake stopped matching the confirmed response: "+hs);
-            break;
-          }
-          int did=(cid==0x39||cid==0x3A||cid==0x5D)?0x0220:0xF130;
-          byte[] answer=exchange(Protocol.testerPresent(cid,0),
-              "AUTO tester-present (not Bosch heartbeat), CID "+cidStr);
-          String status=Protocol.testerSummary(answer);
-          final String row="CID "+cidStr+" TesterPresent → "+status;
-          post(row);
-          ui.post(()->resultText.append(row+"\\n"));
-          JSONObject item=new JSONObject();
-          item.put("mode","bounded_auto_cid");
-          item.put("cid",cidStr);
-          item.put("did",Protocol.didHex(did));
-          item.put("probe",status);
-          item.put("probe_raw",Protocol.hex(answer));
-          if(status.equals("TRANSPORT_REJECTED_00_FF")){
-            rejections++;
-            item.put("result","transport_rejected_not_a_cid_verdict");
-          }else if(status.equals("TESTER_PRESENT_CANDIDATE_UNVERIFIED")){
-            candidates++;
-            byte[] read=exchange(Protocol.read(cid,did,1),"AUTO read DID "+
-                    Protocol.didHex(did)+" CID "+cidStr);
-            String readStatus=Protocol.summary(read,did);
-            item.put("did_status",readStatus);
-            item.put("did_raw",Protocol.hex(read));
-            post("CID "+cidStr+" DID "+Protocol.didHex(did)+" → "+readStatus);
-            ui.post(()->resultText.append("CID "+cidStr+" DID → "+readStatus+"\\n"));
-            if(readStatus.equals("UDS_POSITIVE_RAW_UNVERIFIED")){
-              confirmed++;
-              item.put("result","matched_did_pattern_unverified_transport_frame");
-              synchronized(values){values.add(item);}
-              updateState("CID "+cidStr+" answered with matching UDS DID bytes; examine trace before trusting.",true);
-              post("AUTO STOP: first matching DID candidate CID "+cidStr);
-              return;
-            }else if(readStatus.equals("TRANSPORT_REJECTED_00_FF")){
-              rejections++;
-              item.put("result","transport_rejected_after_tester_candidate");
-            }else item.put("result","tester_candidate_but_no_matching_did");
-          }else item.put("result","no_confirmed_tester_positive");
-          synchronized(values){values.add(item);}
-          if(cancel||rejections>=Protocol.MAX_TRANSPORT_REJECTS)break;
-          try{Thread.sleep(Protocol.MIN_PROBE_DELAY_MS);}
-          catch(InterruptedException ie){Thread.currentThread().interrupt();break;}
+        byte[] h=exchange(Protocol.handshake(),"Passive mode / handshake only");
+        if(!"HANDSHAKE_SLIDING_WINDOW_A".equals(Protocol.summary(h,0)))
+          throw new Exception("Handshake not confirmed");
+        post("PASSIVE: 4x 750ms receive windows; no outbound diagnostic payloads.");
+        int found=0;
+        for(int i=0;i<4&&!cancel;i++){
+          if(conn==null||in==null)throw new Exception("USB disconnected");
+          byte[] raw=new byte[Protocol.LEN];
+          int n=conn.bulkTransfer(in,raw,Protocol.LEN,750);
+          if(n>0){
+            found++;
+            byte[] rx=Arrays.copyOf(raw,n);
+            record("IN",rx,"PASSIVE unsolicited packet #"+found);
+            post("PASSIVE classification: "+Protocol.transportSummary(rx));
+          }else post("PASSIVE receive window "+(i+1)+": no packet ("+n+")");
         }
-        String finalStatus="Discovery ended: "+tries+" attempted, "+candidates+
-            " tester candidates, "+confirmed+" DID matches, "+rejections+
-            " transport refusals.";
-        post(finalStatus);
-        updateState(finalStatus+" No proven diagnostic channel until DID confirmed.",confirmed>0);
-      }catch(Exception e){
-        updateState("AUTO STOP: "+e.getMessage()+" (export the log)",false);
-      }
+        final int packets=found;
+        ui.post(()->resultText.append("Passive mode: "+packets+
+          " unsolicited packet(s). A timeout is not a transport rejection.\\n"));
+        updateState("Passive capture complete: "+packets+" unsolicited USB IN frames.",true);
+      }catch(Exception e){updateState("Passive capture stopped: "+e.getMessage(),false);}
     });
   }
   private void clearScreen(){
@@ -365,9 +331,9 @@ public final class MainActivity extends Activity {
   private String buildReport(){
     JSONObject root=new JSONObject();
     try{
-      root.put("app","Bosch BES2 Diagnostic Lab 2.1 (experimental read only)");
+      root.put("app","Bosch BES2 USB Lab 4.0 (experimental read-only)");
       root.put("usb_vid_pid","108C:0155");
-      root.put("hardware_validated",false);
+      root.put("hardware_validated",false);root.put("heartbeat_protocol_verified",false);root.put("sliding_window_a_full_implementation_verified",false);
       root.put("note","The JSON trace may include device serial numbers. Do not publish unredacted logs.");
       synchronized(values){root.put("results",new JSONArray(values));}
       synchronized(packetLog){root.put("trace",new JSONArray(packetLog));}
