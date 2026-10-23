@@ -64,6 +64,48 @@ using (var json = JsonDocument.Parse(File.ReadAllText(confirmed.ReportFile!))) {
         json.RootElement.GetProperty("values")[0].GetProperty("raw_data_hex").GetString() == "05 09 02 00", "persisted JSON contains exactly the confirmed value");
 }
 
+
+var researchPositive = observedBui.ToArray(); researchPositive[14] = 0x21;
+var researchOptions = new DiagnosticOptions {
+    ResearchDid = 0x0221, HandshakeDelayMs = 0, HandshakeTimeoutMs = 25,
+    SessionTimeoutMs = 25, ReportDirectory = testDirectory
+};
+var researchStream = new FakeStream(Raw(0, 1, 2), researchPositive, Raw(0, 0xFF));
+var researchResult = Run(researchStream, researchOptions);
+Assert(researchResult.Outcome == "BUI_READ_CANDIDATE_UNVERIFIED" &&
+    researchResult.EcuStatus == "BUI_PAYLOAD_SEMANTICS_UNVERIFIED" &&
+    researchResult.VerifiedEcuValues == 0 && researchResult.Values.Count == 0,
+    "new DID matches CAN/UDS frame but is NOT interpreted or called a verified ECU value");
+Assert(researchResult.CandidateValues.Count == 1 &&
+    researchResult.CandidateValues[0].Did == "0221" &&
+    researchResult.CandidateValues[0].RawDataHex == "05 09 02 00" &&
+    researchResult.CandidateValues[0].Validation == "STRUCTURAL_CANDIDATE_ONLY_NOT_INTERPRETED",
+    "research candidate records DID and raw bytes explicitly without claiming hardware version");
+Assert(researchResult.ResearchDid == "0221" && researchResult.UnverifiedCandidateFrames == 1 &&
+    researchStream.Writes.Count == 2 && researchStream.Disposed,
+    "research session sends exactly handshake + selected single read and then closes");
+Assert(researchStream.Writes[0].SequenceEqual(Protocol.ToWindowsReport(Protocol.Handshake(), 65)) &&
+    researchStream.Writes[1].SequenceEqual(Protocol.ToWindowsReport(BuiResearch.BuildReadRequest(0x0221), 65)),
+    "new runner emits correct selected DID wire bytes only");
+using (var json = JsonDocument.Parse(File.ReadAllText(researchResult.ReportFile!))) {
+    Assert(json.RootElement.GetProperty("verified_ecu_values").GetInt32() == 0 &&
+        json.RootElement.GetProperty("research_did").GetString() == "0221" &&
+        json.RootElement.GetProperty("candidate_values")[0].GetProperty("raw_data_hex").GetString() == "05 09 02 00",
+        "research JSON clearly separates unverified candidates from verified values");
+}
+
+var mismatchedDidResearch = new FakeStream(Raw(0, 1, 2), observedBui, Raw(0, 0xFF));
+var mismatchedReport = Run(mismatchedDidResearch, researchOptions);
+Assert(mismatchedReport.Outcome == "TRANSPORT_ERROR_00_FF" &&
+    mismatchedReport.CandidateValues.Count == 0 && mismatchedReport.VerifiedEcuValues == 0,
+    "wrong DID can never be promoted to research candidate");
+var invalidResearchStream = new FakeStream();
+var invalidResearchOptions = new DiagnosticOptions { ResearchDid = 0xF130,
+    HandshakeTimeoutMs = 25, SessionTimeoutMs = 25, ReportDirectory = testDirectory };
+var invalidResearch = Run(invalidResearchStream, invalidResearchOptions);
+Assert(invalidResearch.Outcome == "INVALID_OPTIONS" && invalidResearchStream.Writes.Count == 0,
+    "uncatalogued BMS DID rejected before USB open or writes");
+
 var prematureStream = new FakeStream(observedBui, Raw(0, 1, 2), Raw(0, 0xFF));
 var premature = Run(prematureStream);
 Assert(premature.VerifiedEcuValues == 0 && premature.Outcome == "TRANSPORT_ERROR_00_FF", "a valid-looking BUI reply before this request cannot become its value");
