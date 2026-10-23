@@ -114,6 +114,9 @@ public final class MainActivity extends Activity {
     add(root,text("Published BUI CIDs 39, 3A, 5D are research candidates. Motor/BMS CIDs 3B/3C are LEGACY and may not work on your firmware.",12,0xffffd08b));
     button(root,"3 · Read first DID (safe protocol probe)",()->readData(false));
     button(root,"4 · Read profile DIDs (stops on transport error)",()->readData(true));
+    button(root,"AUTO · Discover published CIDs (bounded read-only probe)",this::autoDiscover);
+    add(root,text("Tests 7 published CIDs with UDS TesterPresent, then reads a single DID only on a plausible reply. Stops at the first matched DID, after 3 transport rejections, or when you press Stop. This is NOT an authentication brute-force.",12,0xffffd08b));
+
     button(root,"Stop requests",()->{cancel=true;post("Stop requested.");});
     progressText=text("Read: 0 confirmed",14,0xffc9ddf6);add(root,progressText);
     resultText=text("Results appear here",13,0xffd5f5cd);
@@ -266,6 +269,92 @@ public final class MainActivity extends Activity {
       }catch(Exception e){updateState("Diagnostics stopped: "+e.getMessage(),false);}
     });
   }
+
+  /**
+   * Experimental, bounded discovery of seven documented candidate CIDs.
+   * There is no published byte-level spec for the community's heartbeat query.
+   * The diagnostic TesterPresent service used here is a distinct, standard UDS
+   * request and MUST NOT be reported as confirmed Bosch heartbeat support.
+   * Never enumerate authentication codes or issue configuration writes.
+   */
+  private void autoDiscover(){
+    startJob(()->{
+      int tries=0,rejections=0,candidates=0,confirmed=0;
+      try{
+        post("AUTO DISCOVERY started: max "+Protocol.DISCOVERY_CIDS.length+
+             " published CID candidates, max "+Protocol.MAX_TRANSPORT_REJECTS+
+             " transport rejects, minimum "+Protocol.MIN_PROBE_DELAY_MS+"ms pause.");
+        updateState("Auto CID discovery: read-only, limited",true);
+        for(int cid:Protocol.DISCOVERY_CIDS){
+          if(cancel)break;
+          if(rejections>=Protocol.MAX_TRANSPORT_REJECTS){
+            post("SAFETY STOP: repeated 00 FF refusals; not a valid CID result.");
+            break;
+          }
+          tries++;
+          String cidStr=String.format(Locale.US,"%02X",cid);
+          ui.post(()->progressText.setText("CID scan "+triesSnapshot(cidStr)+" of "+
+              Protocol.DISCOVERY_CIDS.length));
+          // Begin a new transport session before each candidate.
+          byte[] hello=exchange(Protocol.handshake(),"AUTO handshake for CID "+cidStr);
+          String hs=Protocol.summary(hello,0);
+          if(!hs.equals("HANDSHAKE_SLIDING_WINDOW_A")){
+            post("AUTO STOP: handshake stopped matching the confirmed response: "+hs);
+            break;
+          }
+          int did=(cid==0x39||cid==0x3A||cid==0x5D)?0x0220:0xF130;
+          byte[] answer=exchange(Protocol.testerPresent(cid,0),
+              "AUTO tester-present (not Bosch heartbeat), CID "+cidStr);
+          String status=Protocol.testerSummary(answer);
+          final String row="CID "+cidStr+" TesterPresent → "+status;
+          post(row);
+          ui.post(()->resultText.append(row+"\\n"));
+          JSONObject item=new JSONObject();
+          item.put("mode","bounded_auto_cid");
+          item.put("cid",cidStr);
+          item.put("did",Protocol.didHex(did));
+          item.put("probe",status);
+          item.put("probe_raw",Protocol.hex(answer));
+          if(status.equals("TRANSPORT_REJECTED_00_FF")){
+            rejections++;
+            item.put("result","transport_rejected_not_a_cid_verdict");
+          }else if(status.equals("TESTER_PRESENT_CANDIDATE_UNVERIFIED")){
+            candidates++;
+            byte[] read=exchange(Protocol.read(cid,did,1),"AUTO read DID "+
+                    Protocol.didHex(did)+" CID "+cidStr);
+            String readStatus=Protocol.summary(read,did);
+            item.put("did_status",readStatus);
+            item.put("did_raw",Protocol.hex(read));
+            post("CID "+cidStr+" DID "+Protocol.didHex(did)+" → "+readStatus);
+            ui.post(()->resultText.append("CID "+cidStr+" DID → "+readStatus+"\\n"));
+            if(readStatus.equals("UDS_POSITIVE_RAW_UNVERIFIED")){
+              confirmed++;
+              item.put("result","matched_did_pattern_unverified_transport_frame");
+              synchronized(values){values.add(item);}
+              updateState("CID "+cidStr+" answered with matching UDS DID bytes; examine trace before trusting.",true);
+              post("AUTO STOP: first matching DID candidate CID "+cidStr);
+              return;
+            }else if(readStatus.equals("TRANSPORT_REJECTED_00_FF")){
+              rejections++;
+              item.put("result","transport_rejected_after_tester_candidate");
+            }else item.put("result","tester_candidate_but_no_matching_did");
+          }else item.put("result","no_confirmed_tester_positive");
+          synchronized(values){values.add(item);}
+          if(cancel||rejections>=Protocol.MAX_TRANSPORT_REJECTS)break;
+          try{Thread.sleep(Protocol.MIN_PROBE_DELAY_MS);}
+          catch(InterruptedException ie){Thread.currentThread().interrupt();break;}
+        }
+        String finalStatus="Discovery ended: "+tries+" attempted, "+candidates+
+            " tester candidates, "+confirmed+" DID matches, "+rejections+
+            " transport refusals.";
+        post(finalStatus);
+        updateState(finalStatus+" No proven diagnostic channel until DID confirmed.",confirmed>0);
+      }catch(Exception e){
+        updateState("AUTO STOP: "+e.getMessage()+" (export the log)",false);
+      }
+    });
+  }
+  private String triesSnapshot(String cid){return cid;}
   private void clearScreen(){
     if(busy){post("Stop diagnostics first");return;}
     synchronized(packetLog){packetLog.clear();}
@@ -276,7 +365,7 @@ public final class MainActivity extends Activity {
   private String buildReport(){
     JSONObject root=new JSONObject();
     try{
-      root.put("app","Bosch BES2 Diagnostic Lab 2.0 (experimental read only)");
+      root.put("app","Bosch BES2 Diagnostic Lab 2.1 (experimental read only)");
       root.put("usb_vid_pid","108C:0155");
       root.put("hardware_validated",false);
       root.put("note","The JSON trace may include device serial numbers. Do not publish unredacted logs.");
