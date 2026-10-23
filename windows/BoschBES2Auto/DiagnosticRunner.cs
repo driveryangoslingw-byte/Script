@@ -301,7 +301,27 @@ public sealed class DiagnosticRunner
                     Record("classify", "session", $"BUI_SOFTWARE_VERSION_READ; verified_ecu_values={report.VerifiedEcuValues}. No further writes.");
                     return;
                 }
-                // For other catalogued BUI DIDs only the transport/CAN/UDS envelope
+                // DID 0221 returned 00 00 02 02 in repeated captures on this
+                // physical bike; a published Bosch DiagnosticTool report for
+                // BUI255 with SW 5.9.2.0 independently labels 0.0.2.2 as
+                // Hardware version (Bosch DiagnosticTool IBD manual, p26).
+                if (options.ResearchDid == 0x0221 &&
+                    BuiResearch.TryReadHardwareVersion(raw, out var hardwareVersion))
+                {
+                    report.Values.Add(new DiagnosticValue {
+                        Ecu = "BUI", Cid = "003D", Did = "0221",
+                        Name = "Версия аппаратного обеспечения Intuvia",
+                        Value = hardwareVersion,
+                        RawDataHex = Protocol.Hex(raw.Skip(15).Take(4).ToArray())
+                    });
+                    report.Outcome = "BUI_HARDWARE_VERSION_READ";
+                    report.SessionStatus = "READ_RESPONSE_CONFIRMED";
+                    report.EcuStatus = "BUI_READ_CONFIRMED";
+                    Record("classify", "session",
+                        $"BUI 0221: hardware version {hardwareVersion} (Bosch manual cross-check). No further writes.");
+                    return;
+                }
+                // For remaining BUI DID candidates only the transport/CAN/UDS envelope
                 // is checked. Do not interpret bytes or count a verified ECU value
                 // until semantics are independently validated on this device.
                 // Owner-provided Intuvia odometer = 2326.6 km and device raw
