@@ -6,7 +6,9 @@
   <ItemGroup>
     <PackageReference Include="HidSharp" Version="2.6.4" />
     <Compile Include="../BoschBES2Auto/Protocol.cs" Link="Protocol.cs" />
+    <Compile Include="../BoschBES2Auto/InitialSwaTransport.cs" Link="InitialSwaTransport.cs" />
     <Compile Include="../BoschBES2Auto/BuiResearch.cs" Link="BuiResearch.cs" />
     <Compile Include="../BoschBES2Auto/DiagnosticRunner.cs" Link="DiagnosticRunner.cs" />
   </ItemGroup>
 </Project>
+

@@ -1,0 +1,683 @@
+{
+  "sha256": "fbcb231486d98d8d05e33f67fc07003f9d0366a543c7dc99728e82f42f3ad0a6",
+  "scope": "Offline known read handlers; no USB or native packages.",
+  "date_layout": {
+    "day_bits": "15..11",
+    "month_bits": "10..7",
+    "year_code_bits": "6..0",
+    "input": "13 16",
+    "day": 2,
+    "month": 6,
+    "year_code": 22,
+    "calendar_year_base": "UNVERIFIED"
+  },
+  "date_field_checks": [
+    {
+      "address": "0802e210",
+      "lsb": 11,
+      "width": 5,
+      "value": 2
+    },
+    {
+      "address": "0802e218",
+      "lsb": 7,
+      "width": 4,
+      "value": 6
+    },
+    {
+      "address": "0802e228",
+      "lsb": 11,
+      "width": 5,
+      "value": 2
+    },
+    {
+      "address": "0802e232",
+      "lsb": 7,
+      "width": 4,
+      "value": 6
+    }
+  ],
+  "language_labels": [
+    {
+      "code": 0,
+      "label": "−  Deutsch  +"
+    },
+    {
+      "code": 1,
+      "label": "−  English  +"
+    },
+    {
+      "code": 2,
+      "label": "−  Français  +"
+    },
+    {
+      "code": 3,
+      "label": "−  Italiano  +"
+    },
+    {
+      "code": 4,
+      "label": "−  Español  +"
+    },
+    {
+      "code": 5,
+      "label": "−  日本語  +"
+    },
+    {
+      "code": 6,
+      "label": "−  Nederlands  +"
+    },
+    {
+      "code": 7,
+      "label": null
+    },
+    {
+      "code": 8,
+      "label": "−  Dansk  +"
+    },
+    {
+      "code": 9,
+      "label": "−  Svenska  +"
+    },
+    {
+      "code": 10,
+      "label": "−  Português  +"
+    }
+  ],
+  "language_getter_calls": [
+    {
+      "address": "0800bdd2",
+      "following_bytes": "05 46 29 46 2d 20 13 f0 ee f9 04 46 00 20 41 1e cd e9 00 01"
+    },
+    {
+      "address": "0800caa6",
+      "following_bytes": "07 46 bd 4e b0 7e 81 07 4b d5 c0 07 49 d1 fd f7 6d f9 00 28"
+    },
+    {
+      "address": "0801dbc0",
+      "following_bytes": "80 46 41 46 2d 20 01 f0 f7 fa 07 46 d4 f8 02 00 00 0e d4 f8"
+    },
+    {
+      "address": "0801dc16",
+      "following_bytes": "80 46 41 46 23 20 01 f0 cc fa 07 46 d4 f8 02 00 00 0e d4 f8"
+    },
+    {
+      "address": "0801e3de",
+      "following_bytes": "8d f8 00 00 6a 46 01 21 2f 20 ff f7 a4 fd ee f7 0b fb 8d f8"
+    },
+    {
+      "address": "0802eb3a",
+      "following_bytes": "00 90 01 22 29 46 a0 68 f0 f7 80 f9 01 20 a0 81 fe f7 c7 f8"
+    }
+  ],
+  "units_wire_mapping": {
+    "00": "internal enum 1",
+    "01": "internal enum 2"
+  },
+  "cases": [
+    {
+      "case": "date 13 16",
+      "seed_value": 4886,
+      "output": "13 16",
+      "nrc": null,
+      "completed": true,
+      "trace": [
+        {
+          "address": "0802e872",
+          "bytes": "38b5",
+          "operation": "PUSH [3, 4, 5, 14]"
+        },
+        {
+          "address": "0802e874",
+          "bytes": "0446",
+          "operation": "HighOp 2 r4,r0"
+        },
+        {
+          "address": "0802e876",
+          "bytes": "f7ef",
+          "operation": "BL 0801e76a"
+        },
+        {
+          "address": "0801e76a",
+          "bytes": "b348",
+          "operation": "LDR_LITERAL r0=200003b8"
+        },
+        {
+          "address": "0801e76c",
+          "bytes": "0068",
+          "operation": "Memory True:4 r0,[200003b8]"
+        },
+        {
+          "address": "0801e76e",
+          "bytes": "4770",
+          "operation": "HighOp 3 r0,r14"
+        },
+        {
+          "address": "0802e87a",
+          "bytes": "0090",
+          "operation": "SP memory r0"
+        },
+        {
+          "address": "0802e87c",
+          "bytes": "0098",
+          "operation": "SP memory r0"
+        },
+        {
+          "address": "0802e87e",
+          "bytes": "00f07f00",
+          "operation": "AND r0,r0,#127"
+        },
+        {
+          "address": "0802e882",
+          "bytes": "a168",
+          "operation": "Memory True:4 r1,[20008008]"
+        },
+        {
+          "address": "0802e884",
+          "bytes": "4870",
+          "operation": "Memory False:1 r0,[20008101]"
+        },
+        {
+          "address": "0802e886",
+          "bytes": "a068",
+          "operation": "Memory True:4 r0,[20008008]"
+        },
+        {
+          "address": "0802e888",
+          "bytes": "4078",
+          "operation": "Memory True:1 r0,[20008101]"
+        },
+        {
+          "address": "0802e88a",
+          "bytes": "0099",
+          "operation": "SP memory r1"
+        },
+        {
+          "address": "0802e88c",
+          "bytes": "c1f3c311",
+          "operation": "UBFX r1,r1,#7,#4"
+        },
+        {
+          "address": "0802e890",
+          "bytes": "c907",
+          "operation": "Shift r1,r1,#31"
+        },
+        {
+          "address": "0802e892",
+          "bytes": "40ea1160",
+          "operation": "ORR r0,r0,r1,shift=1:24"
+        },
+        {
+          "address": "0802e896",
+          "bytes": "a168",
+          "operation": "Memory True:4 r1,[20008008]"
+        },
+        {
+          "address": "0802e898",
+          "bytes": "4870",
+          "operation": "Memory False:1 r0,[20008101]"
+        },
+        {
+          "address": "0802e89a",
+          "bytes": "0098",
+          "operation": "SP memory r0"
+        },
+        {
+          "address": "0802e89c",
+          "bytes": "c0f3c310",
+          "operation": "UBFX r0,r0,#7,#4"
+        },
+        {
+          "address": "0802e8a0",
+          "bytes": "4008",
+          "operation": "Shift r0,r0,#1"
+        },
+        {
+          "address": "0802e8a2",
+          "bytes": "a168",
+          "operation": "Memory True:4 r1,[20008008]"
+        },
+        {
+          "address": "0802e8a4",
+          "bytes": "0870",
+          "operation": "Memory False:1 r0,[20008100]"
+        },
+        {
+          "address": "0802e8a6",
+          "bytes": "a068",
+          "operation": "Memory True:4 r0,[20008008]"
+        },
+        {
+          "address": "0802e8a8",
+          "bytes": "0078",
+          "operation": "Memory True:1 r0,[20008100]"
+        },
+        {
+          "address": "0802e8aa",
+          "bytes": "0099",
+          "operation": "SP memory r1"
+        },
+        {
+          "address": "0802e8ac",
+          "bytes": "c1f3c421",
+          "operation": "UBFX r1,r1,#11,#5"
+        },
+        {
+          "address": "0802e8b0",
+          "bytes": "40eac100",
+          "operation": "ORR r0,r0,r1,shift=0:3"
+        },
+        {
+          "address": "0802e8b4",
+          "bytes": "a168",
+          "operation": "Memory True:4 r1,[20008008]"
+        },
+        {
+          "address": "0802e8b6",
+          "bytes": "0870",
+          "operation": "Memory False:1 r0,[20008100]"
+        },
+        {
+          "address": "0802e8b8",
+          "bytes": "0220",
+          "operation": "ImmOp 0 r0,#2"
+        },
+        {
+          "address": "0802e8ba",
+          "bytes": "a081",
+          "operation": "MemoryHalf False r0,[2000800c]"
+        },
+        {
+          "address": "0802e8bc",
+          "bytes": "fef710fa",
+          "operation": "BL 0802cce0"
+        },
+        {
+          "address": "0802e8c0",
+          "bytes": "bd38",
+          "operation": "POP [3, 4, 5, 15]"
+        }
+      ]
+    },
+    {
+      "case": "language raw 01",
+      "seed_value": 1,
+      "output": "01",
+      "nrc": null,
+      "completed": true,
+      "trace": [
+        {
+          "address": "0802eb34",
+          "bytes": "38b5",
+          "operation": "PUSH [3, 4, 5, 14]"
+        },
+        {
+          "address": "0802eb36",
+          "bytes": "0446",
+          "operation": "HighOp 2 r4,r0"
+        },
+        {
+          "address": "0802eb38",
+          "bytes": "6d46",
+          "operation": "HighOp 2 r5,r13"
+        },
+        {
+          "address": "0802eb3a",
+          "bytes": "f7dd",
+          "operation": "BL 0800ca98"
+        },
+        {
+          "address": "0800ca98",
+          "bytes": "c248",
+          "operation": "LDR_LITERAL r0=200001c0"
+        },
+        {
+          "address": "0800ca9a",
+          "bytes": "0078",
+          "operation": "Memory True:1 r0,[200001c0]"
+        },
+        {
+          "address": "0800ca9c",
+          "bytes": "4770",
+          "operation": "HighOp 3 r0,r14"
+        },
+        {
+          "address": "0802eb3e",
+          "bytes": "0090",
+          "operation": "SP memory r0"
+        },
+        {
+          "address": "0802eb40",
+          "bytes": "0122",
+          "operation": "ImmOp 0 r2,#1"
+        },
+        {
+          "address": "0802eb42",
+          "bytes": "2946",
+          "operation": "HighOp 2 r1,r5"
+        },
+        {
+          "address": "0802eb44",
+          "bytes": "a068",
+          "operation": "Memory True:4 r0,[20008008]"
+        },
+        {
+          "address": "0802eb46",
+          "bytes": "f0f780f9",
+          "operation": "BL 0801ee4a"
+        },
+        {
+          "address": "0802eb4a",
+          "bytes": "0120",
+          "operation": "ImmOp 0 r0,#1"
+        },
+        {
+          "address": "0802eb4c",
+          "bytes": "a081",
+          "operation": "MemoryHalf False r0,[2000800c]"
+        },
+        {
+          "address": "0802eb4e",
+          "bytes": "fef7c7f8",
+          "operation": "BL 0802cce0"
+        },
+        {
+          "address": "0802eb52",
+          "bytes": "bd38",
+          "operation": "POP [3, 4, 5, 15]"
+        }
+      ]
+    },
+    {
+      "case": "units internal 1",
+      "seed_value": 1,
+      "output": "00",
+      "nrc": null,
+      "completed": true,
+      "trace": [
+        {
+          "address": "0802eb54",
+          "bytes": "70b5",
+          "operation": "PUSH [4, 5, 6, 14]"
+        },
+        {
+          "address": "0802eb56",
+          "bytes": "0446",
+          "operation": "HighOp 2 r4,r0"
+        },
+        {
+          "address": "0802eb58",
+          "bytes": "f7dd",
+          "operation": "BL 0800ca0a"
+        },
+        {
+          "address": "0800ca0a",
+          "bytes": "e648",
+          "operation": "LDR_LITERAL r0=200001c0"
+        },
+        {
+          "address": "0800ca0c",
+          "bytes": "4078",
+          "operation": "Memory True:1 r0,[200001c1]"
+        },
+        {
+          "address": "0800ca0e",
+          "bytes": "4770",
+          "operation": "HighOp 3 r0,r14"
+        },
+        {
+          "address": "0802eb5c",
+          "bytes": "0546",
+          "operation": "HighOp 2 r5,r0"
+        },
+        {
+          "address": "0802eb5e",
+          "bytes": "012d",
+          "operation": "ImmOp 1 r5,#1"
+        },
+        {
+          "address": "0802eb60",
+          "bytes": "03d1",
+          "operation": "ConditionalBranch 1"
+        },
+        {
+          "address": "0802eb62",
+          "bytes": "0020",
+          "operation": "ImmOp 0 r0,#0"
+        },
+        {
+          "address": "0802eb64",
+          "bytes": "a168",
+          "operation": "Memory True:4 r1,[20008008]"
+        },
+        {
+          "address": "0802eb66",
+          "bytes": "0870",
+          "operation": "Memory False:1 r0,[20008100]"
+        },
+        {
+          "address": "0802eb68",
+          "bytes": "e008",
+          "operation": "Branch"
+        },
+        {
+          "address": "0802eb7c",
+          "bytes": "0120",
+          "operation": "ImmOp 0 r0,#1"
+        },
+        {
+          "address": "0802eb7e",
+          "bytes": "a081",
+          "operation": "MemoryHalf False r0,[2000800c]"
+        },
+        {
+          "address": "0802eb80",
+          "bytes": "fef7aef8",
+          "operation": "BL 0802cce0"
+        },
+        {
+          "address": "0802eb84",
+          "bytes": "bd70",
+          "operation": "POP [4, 5, 6, 15]"
+        }
+      ]
+    },
+    {
+      "case": "units internal 2",
+      "seed_value": 2,
+      "output": "01",
+      "nrc": null,
+      "completed": true,
+      "trace": [
+        {
+          "address": "0802eb54",
+          "bytes": "70b5",
+          "operation": "PUSH [4, 5, 6, 14]"
+        },
+        {
+          "address": "0802eb56",
+          "bytes": "0446",
+          "operation": "HighOp 2 r4,r0"
+        },
+        {
+          "address": "0802eb58",
+          "bytes": "f7dd",
+          "operation": "BL 0800ca0a"
+        },
+        {
+          "address": "0800ca0a",
+          "bytes": "e648",
+          "operation": "LDR_LITERAL r0=200001c0"
+        },
+        {
+          "address": "0800ca0c",
+          "bytes": "4078",
+          "operation": "Memory True:1 r0,[200001c1]"
+        },
+        {
+          "address": "0800ca0e",
+          "bytes": "4770",
+          "operation": "HighOp 3 r0,r14"
+        },
+        {
+          "address": "0802eb5c",
+          "bytes": "0546",
+          "operation": "HighOp 2 r5,r0"
+        },
+        {
+          "address": "0802eb5e",
+          "bytes": "012d",
+          "operation": "ImmOp 1 r5,#1"
+        },
+        {
+          "address": "0802eb60",
+          "bytes": "d103",
+          "operation": "ConditionalBranch 1"
+        },
+        {
+          "address": "0802eb6a",
+          "bytes": "022d",
+          "operation": "ImmOp 1 r5,#2"
+        },
+        {
+          "address": "0802eb6c",
+          "bytes": "03d1",
+          "operation": "ConditionalBranch 1"
+        },
+        {
+          "address": "0802eb6e",
+          "bytes": "0120",
+          "operation": "ImmOp 0 r0,#1"
+        },
+        {
+          "address": "0802eb70",
+          "bytes": "a168",
+          "operation": "Memory True:4 r1,[20008008]"
+        },
+        {
+          "address": "0802eb72",
+          "bytes": "0870",
+          "operation": "Memory False:1 r0,[20008100]"
+        },
+        {
+          "address": "0802eb74",
+          "bytes": "e002",
+          "operation": "Branch"
+        },
+        {
+          "address": "0802eb7c",
+          "bytes": "0120",
+          "operation": "ImmOp 0 r0,#1"
+        },
+        {
+          "address": "0802eb7e",
+          "bytes": "a081",
+          "operation": "MemoryHalf False r0,[2000800c]"
+        },
+        {
+          "address": "0802eb80",
+          "bytes": "fef7aef8",
+          "operation": "BL 0802cce0"
+        },
+        {
+          "address": "0802eb84",
+          "bytes": "bd70",
+          "operation": "POP [4, 5, 6, 15]"
+        }
+      ]
+    },
+    {
+      "case": "units invalid internal 3",
+      "seed_value": 3,
+      "output": "00",
+      "nrc": 34,
+      "completed": true,
+      "trace": [
+        {
+          "address": "0802eb54",
+          "bytes": "70b5",
+          "operation": "PUSH [4, 5, 6, 14]"
+        },
+        {
+          "address": "0802eb56",
+          "bytes": "0446",
+          "operation": "HighOp 2 r4,r0"
+        },
+        {
+          "address": "0802eb58",
+          "bytes": "f7dd",
+          "operation": "BL 0800ca0a"
+        },
+        {
+          "address": "0800ca0a",
+          "bytes": "e648",
+          "operation": "LDR_LITERAL r0=200001c0"
+        },
+        {
+          "address": "0800ca0c",
+          "bytes": "4078",
+          "operation": "Memory True:1 r0,[200001c1]"
+        },
+        {
+          "address": "0800ca0e",
+          "bytes": "4770",
+          "operation": "HighOp 3 r0,r14"
+        },
+        {
+          "address": "0802eb5c",
+          "bytes": "0546",
+          "operation": "HighOp 2 r5,r0"
+        },
+        {
+          "address": "0802eb5e",
+          "bytes": "012d",
+          "operation": "ImmOp 1 r5,#1"
+        },
+        {
+          "address": "0802eb60",
+          "bytes": "d103",
+          "operation": "ConditionalBranch 1"
+        },
+        {
+          "address": "0802eb6a",
+          "bytes": "022d",
+          "operation": "ImmOp 1 r5,#2"
+        },
+        {
+          "address": "0802eb6c",
+          "bytes": "d103",
+          "operation": "ConditionalBranch 1"
+        },
+        {
+          "address": "0802eb76",
+          "bytes": "2220",
+          "operation": "ImmOp 0 r0,#34"
+        },
+        {
+          "address": "0802eb78",
+          "bytes": "fdf7a8ff",
+          "operation": "BL 0802cacc"
+        },
+        {
+          "address": "0802eb7c",
+          "bytes": "0120",
+          "operation": "ImmOp 0 r0,#1"
+        },
+        {
+          "address": "0802eb7e",
+          "bytes": "a081",
+          "operation": "MemoryHalf False r0,[2000800c]"
+        },
+        {
+          "address": "0802eb80",
+          "bytes": "fef7aef8",
+          "operation": "BL 0802cce0"
+        },
+        {
+          "address": "0802eb84",
+          "bytes": "bd70",
+          "operation": "POP [4, 5, 6, 15]"
+        }
+      ]
+    }
+  ]
+}

@@ -249,7 +249,60 @@ try {
     Assert(busy.Outcome == "SESSION_ALREADY_RUNNING" && busyDevice.Opens == 0 && busy.WriteCalls == 0, "named mutex blocks parallel new sessions");
 } finally { unlock.Set(); holder.GetAwaiter().GetResult(); }
 
+DiagnosticOptions DidOptions(int did) => new() { ResearchDid = did, HandshakeTimeoutMs = 25,
+    SessionTimeoutMs = 25, ReportDirectory = testDirectory };
+var languageReply = observedBui.ToArray();
+languageReply[10] = 5; languageReply[11] = 4; languageReply[14] = 0x4A; languageReply[15] = 1;
+var languageStream = new FakeStream(Raw(0, 1, 2), languageReply, Raw(0, 0xFF));
+var language = Run(languageStream, DidOptions(0x024A));
+Assert(language.Outcome == "BUI_LANGUAGE_READ" && language.Values.Single().Value == "English" &&
+    language.Values[0].RawDataHex == "01", "known language emits exactly its firmware-backed decoded value");
+Assert(languageStream.Writes.Count == 2 && languageStream.Reads == 2 && languageStream.Disposed,
+    "language keeps one handshake and one read, closes immediately");
+using (var json = JsonDocument.Parse(File.ReadAllText(language.ReportFile!)))
+    Assert(json.RootElement.GetProperty("values")[0].GetProperty("value").GetString() == "English" &&
+        json.RootElement.GetProperty("verified_ecu_values").GetInt32() == 1, "language is persisted with one verified value");
+var unknownLanguageReply = languageReply.ToArray(); unknownLanguageReply[15] = 7;
+var unknownLanguage = Run(new FakeStream(Raw(0, 1, 2), unknownLanguageReply), DidOptions(0x024A));
+Assert(unknownLanguage.VerifiedEcuValues == 0 && unknownLanguage.CandidateValues.Single().RawDataHex == "07",
+    "unlabelled firmware language slot stays raw, never fallback English");
+Assert(researchResult.CandidateValues.Single().Interpretation.Contains("код года: 22") &&
+    !researchResult.CandidateValues.Single().Interpretation.Contains("2022"), "partial date never promotes a guessed complete year");
+using (var json = JsonDocument.Parse(File.ReadAllText(researchResult.ReportFile!)))
+    Assert(json.RootElement.GetProperty("candidate_values")[0].GetProperty("interpretation").GetString()!.Contains("Полный календарный год не установлен"),
+        "date limitation survives JSON persistence");
+var absentBackend = new FlakyBackend(3);
+var absent = new DiagnosticRunner(absentBackend).Run(Options());
+Assert(absentBackend.Calls == 3 && absent.Outcome == "NO_DEVICE" && absent.WriteCalls == 0 &&
+    absent.HandshakeStatus == "NOT_SENT" && absent.SessionStatus == "NOT_STARTED_NO_USB_DEVICE",
+    "three passive empty lists end before USB or handshake");
+Assert(absent.Events.Count(e => e.Operation == "enumerate_attempt") == 3 &&
+    !absent.Events.Any(e => e.Operation == "open_call"), "passive attempts recorded without opening a stream");
+var recoveredStream = new FakeStream(Raw(0, 1, 2), observedBui);
+var recoveredDevice = new FakeDevice(recoveredStream);
+var recoveredBackend = new FlakyBackend(1, recoveredDevice);
+var recovered = new DiagnosticRunner(recoveredBackend).Run(Options());
+Assert(recoveredBackend.Calls == 2 && recoveredDevice.Opens == 1 && recoveredStream.Writes.Count == 2 &&
+    recovered.Outcome == "BUI_SOFTWARE_VERSION_READ", "one empty enumeration can recover without repeated USB sessions");
+using var enumerationCancellation = new CancellationTokenSource();
+var cancelledBackend = new FlakyBackend(3) { AfterEnumeration = () => enumerationCancellation.Cancel() };
+var enumerationCancelled = new DiagnosticRunner(cancelledBackend).Run(Options(), enumerationCancellation.Token);
+Assert(enumerationCancelled.Outcome == "CANCELLED" && cancelledBackend.Calls == 1 && enumerationCancelled.WriteCalls == 0,
+    "cancellation during passive enumeration prevents another attempt and every write");
+var absentEnumerationBackend = new FlakyBackend(3);
+var absentEnumeration = new DiagnosticRunner(absentEnumerationBackend).Run(Options(enumerate: true));
+Assert(absentEnumeration.Outcome == "ENUMERATION_ONLY" && absentEnumeration.UsbStatus == "DEVICE_NOT_FOUND_AFTER_PASSIVE_ENUMERATION" &&
+    absentEnumerationBackend.Calls == 3 && absentEnumeration.WriteCalls == 0, "enumeration-only reports absence distinctly and remains passive");
 Console.WriteLine($"{checks} offline diagnostic checks PASS; no real HID enumeration, opens or writes.");
+
+sealed class FlakyBackend(int emptyAttempts, params FakeDevice[] devices) : IDiagnosticHidBackend {
+    public int Calls { get; private set; }
+    public Action? AfterEnumeration { get; init; }
+    public IEnumerable<IDiagnosticHidDevice> Enumerate() {
+        Calls++; AfterEnumeration?.Invoke();
+        return Calls <= emptyAttempts ? Array.Empty<IDiagnosticHidDevice>() : devices;
+    }
+}
 
 sealed class FakeBackend(params FakeDevice[] devices) : IDiagnosticHidBackend {
     public IEnumerable<IDiagnosticHidDevice> Enumerate() => devices;
@@ -293,3 +346,4 @@ sealed class FakeStream(params byte[][] packets) : IDiagnosticHidStream {
     }
     public void Dispose() => Disposed = true;
 }
+

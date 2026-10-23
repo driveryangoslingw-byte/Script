@@ -62,6 +62,7 @@ public sealed record BuiResearchCandidate
     public string Label { get; init; } = "";
     public string RawDataHex { get; init; } = "";
     public string Validation { get; init; } = "STRUCTURAL_CANDIDATE_ONLY_NOT_INTERPRETED";
+    public string Interpretation { get; init; } = "";
 }
 
 public sealed class DiagnosticReport
@@ -79,7 +80,7 @@ public sealed class DiagnosticReport
     public string HandshakeStatus { get; set; } = "NOT_SENT";
     public string SessionStatus { get; set; } = "NOT_STARTED";
     public string EcuStatus { get; set; } = "NO_VERIFIED_ECU_DATA";
-    // Only a validated response to this session's single BUI DID 0220 request adds a value.
+    // Only an exactly matched response with a supported semantic decoder adds a value.
     public int VerifiedEcuValues => Values.Count;
     public int WriteCalls { get; set; }
     public int CompletedWrites { get; set; }
@@ -147,6 +148,19 @@ public sealed class DiagnosticRunner
             report.SessionStatus = "STOPPED_00_FF";
             Record("stop", stage, "Observed 00 FF; meaning undecoded. No further writes.");
             return true;
+        }
+
+        IDiagnosticHidDevice[] EnumerateBounded()
+        {
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var devices = backend.Enumerate().ToArray();
+                Record("enumerate_attempt", "usb", $"Attempt {attempt}/3: {devices.Length} matching interfaces; no stream opens or writes.");
+                if (devices.Length > 0 || attempt == 3) return devices;
+                if (cancellationToken.WaitHandle.WaitOne(150)) cancellationToken.ThrowIfCancellationRequested();
+            }
+            return Array.Empty<IDiagnosticHidDevice>();
         }
 
         void Write(IDiagnosticHidStream stream, byte[] raw, string stage)
@@ -321,9 +335,6 @@ public sealed class DiagnosticRunner
                         $"BUI 0221: hardware version {hardwareVersion} (Bosch manual cross-check). No further writes.");
                     return;
                 }
-                // For remaining BUI DID candidates only the transport/CAN/UDS envelope
-                // is checked. Do not interpret bytes or count a verified ECU value
-                // until semantics are independently validated on this device.
                 // Owner-provided Intuvia odometer = 2326.6 km and device raw
                 // DID 0249 = 00 23 80 5E = 2,326,622 metres, matching after
                 // km/1000 conversion and display rounding. Exact DID and four
@@ -344,13 +355,28 @@ public sealed class DiagnosticRunner
                         $"BUI 0249: {metres} metres = {kilometres} km; compared with owner Intuvia 2326.6 km reading. No further writes.");
                     return;
                 }
+                if (options.ResearchDid == 0x024A && BuiResearch.TryReadLanguage(raw, out var language))
+                {
+                    report.Values.Add(new DiagnosticValue {
+                        Ecu = "BUI", Cid = "003D", Did = "024A", Name = "Язык интерфейса Intuvia",
+                        Value = language, RawDataHex = Protocol.Hex(raw.Skip(15).Take(1).ToArray())
+                    });
+                    report.Outcome = "BUI_LANGUAGE_READ";
+                    report.SessionStatus = "READ_RESPONSE_CONFIRMED";
+                    report.EcuStatus = "BUI_READ_CONFIRMED";
+                    Record("classify", "session", $"BUI 024A: {language}; code mapping checked against original firmware text table. No further writes.");
+                    return;
+                }
+                // Preserve matching raw responses when complete value semantics
+                // remain unverified. In particular, a date year-code is not a full year.
                 if (options.ResearchDid != 0x0220 &&
                     BuiResearch.TryPositiveRead(raw, options.ResearchDid, out var candidate))
                 {
                     report.CandidateValues.Add(new BuiResearchCandidate {
                         Did = options.ResearchDid.ToString("X4"),
                         Label = BuiResearch.Name(options.ResearchDid),
-                        RawDataHex = Protocol.Hex(candidate)
+                        RawDataHex = Protocol.Hex(candidate),
+                        Interpretation = BuiResearch.RawInterpretation(raw, options.ResearchDid)
                     });
                     report.UnverifiedCandidateFrames++;
                     report.Outcome = "BUI_READ_CANDIDATE_UNVERIFIED";
@@ -389,8 +415,8 @@ public sealed class DiagnosticRunner
             if (options.EnumerateOnly)
             {
                 // Enumeration never opens a HID stream and therefore cannot send a report.
-                foreach (var device in backend.Enumerate()) report.Devices.Add(device.Describe());
-                report.UsbStatus = "ENUMERATED_WITHOUT_OPEN";
+                foreach (var device in EnumerateBounded()) report.Devices.Add(device.Describe());
+                report.UsbStatus = report.Devices.Count == 0 ? "DEVICE_NOT_FOUND_AFTER_PASSIVE_ENUMERATION" : "ENUMERATED_WITHOUT_OPEN";
                 report.Outcome = "ENUMERATION_ONLY";
                 Record("enumerate_completed", "usb", $"Matching VID/PID interfaces={report.Devices.Count}; zero opens, zero writes.");
             }
@@ -417,10 +443,11 @@ public sealed class DiagnosticRunner
                     else if (report.Outcome != "PREVIOUS_SESSION_ABANDONED")
                     {
                         Record("mutex_acquired", "usb", MutexName);
-                        var devices = backend.Enumerate().ToArray();
+                        var devices = EnumerateBounded();
                         foreach (var device in devices) report.Devices.Add(device.Describe());
                         report.UsbStatus = "ENUMERATED";
-                        if (devices.Length == 0) { report.Outcome = "NO_DEVICE"; report.UsbStatus = "DEVICE_NOT_FOUND"; }
+                        if (devices.Length == 0) { report.Outcome = "NO_DEVICE"; report.UsbStatus = "DEVICE_NOT_FOUND";
+                            report.SessionStatus = "NOT_STARTED_NO_USB_DEVICE"; }
                         else if (devices.Length != 1) { report.Outcome = "AMBIGUOUS_DEVICE"; report.UsbStatus = "MULTIPLE_MATCHING_INTERFACES"; }
                         else
                         {
@@ -517,7 +544,8 @@ internal interface IDiagnosticHidStream : IDisposable
 }
 internal sealed class HidSharpBackend : IDiagnosticHidBackend
 {
-    public IEnumerable<IDiagnosticHidDevice> Enumerate() => DeviceList.Local.GetHidDevices(Protocol.Vid, Protocol.Pid)
+    public IEnumerable<IDiagnosticHidDevice> Enumerate() => DeviceList.Local.GetHidDevices()
+        .Where(device => device.VendorID == Protocol.Vid && device.ProductID == Protocol.Pid)
         .Select(device => (IDiagnosticHidDevice)new HidSharpDevice(device));
 }
 internal sealed class HidSharpDevice(HidDevice device) : IDiagnosticHidDevice
@@ -547,3 +575,4 @@ internal sealed class HidSharpStream(HidStream stream) : IDiagnosticHidStream
     public void Write(byte[] buffer, int offset, int count) => stream.Write(buffer, offset, count);
     public void Dispose() => stream.Dispose();
 }
+

@@ -2,27 +2,86 @@ namespace BoschBES2Auto;
 
 /// <summary>
 /// A bounded list of publicly described BUI ReadDataByIdentifier candidates.
-/// 0220 and 0249 are hardware-verified, and 0221 matches a published Bosch DiagnosticTool hardware-version example.
+/// USB replies and semantic decoding have separate evidence. Language decoding
+/// is supported by original firmware; the date's calendar-year origin is unknown.
 /// Each run starts from a new handshake and sends exactly one read request.
 /// </summary>
 public static class BuiResearch
 {
     public sealed record DidTarget(ushort Did, string Label, bool HardwareConfirmed)
     {
-        public override string ToString() => $"{Did:X4} · {Label}" + (HardwareConfirmed ? " [проверено]" : " [не проверено]");
+        public bool UsbReplyObserved { get; init; } = HardwareConfirmed;
+        public string EvidenceStatus { get; init; } = HardwareConfirmed ? "VERIFIED" : "NOT_TESTED";
+        public string Note { get; init; } = "";
+        public override string ToString() => $"{Did:X4} · {Label} [{EvidenceStatus}]";
     }
 
     public static readonly IReadOnlyList<DidTarget> Targets = new[] {
         new DidTarget(0x0220, "Версия ПО Intuvia", true),
         new DidTarget(0x0221, "Версия аппаратного обеспечения Intuvia", true),
-        new DidTarget(0x0222, "Дата производства", false),
+        new DidTarget(0x0222, "Дата производства: упакованные поля", false) {
+            UsbReplyObserved = true, EvidenceStatus = "RAW_ONLY",
+            Note = "День, месяц и код года выделены по прошивке. Базовый год ещё не установлен." },
+        new DidTarget(0x0230, "Аппаратный вариант: сырой код", false) {
+            UsbReplyObserved = true, EvidenceStatus = "RAW_ONLY", Note = "Ответ получен; таблица вариантов не установлена." },
+        new DidTarget(0x0245, "Максимум скорости поездки: сырой счётчик", false) {
+            UsbReplyObserved = true, EvidenceStatus = "RAW_ONLY", Note = "Рекорд поездки, не ограничитель ассиста. Масштаб не установлен." },
         new DidTarget(0x0249, "Общий пробег Intuvia (метры → км)", true),
-        new DidTarget(0x024A, "Язык интерфейса", false),
-        new DidTarget(0x024B, "Единицы расстояния", false),
-        new DidTarget(0x024C, "Яркость экрана днём", false),
-        new DidTarget(0x0250, "Яркость экрана ночью", false),
-        new DidTarget(0x0251, "Контрастность дисплея", false),
+        new DidTarget(0x024A, "Язык интерфейса", true) {
+            Note = "Таблица кодов проверена по строкам и обработчикам прошивки. Код 7 остаётся неизвестным." },
+        new DidTarget(0x024B, "Единицы расстояния: сырой код", false) {
+            UsbReplyObserved = true, EvidenceStatus = "RAW_ONLY", Note = "Код получен. Связь внутренних enum с km/mi отдельно не доказана." },
+        new DidTarget(0x024C, "Яркость экрана днём", false) {
+            Note = "В исследованной прошивке обработчик чтения возвращает «не поддерживается»." },
+        new DidTarget(0x0250, "Яркость экрана ночью", false) {
+            Note = "Прошлый тест остановился до USB-open: NO_DEVICE. В дампе — неподдерживаемая функция." },
+        new DidTarget(0x0251, "Контрастность дисплея", false) {
+            Note = "Прошлый тест остановился до USB-open: NO_DEVICE. В дампе — неподдерживаемая функция." },
     };
+
+    // Column indices of the original 11-language resource table. The same
+    // getter is used by DID 024A and by the UI text selector in firmware 5.9.2.0.
+    // Slot 7 has no language label; do not apply the UI's fallback as a decoder.
+    private static readonly IReadOnlyDictionary<byte, string> LanguageNames = new Dictionary<byte, string> {
+        [0] = "Deutsch", [1] = "English", [2] = "Français", [3] = "Italiano",
+        [4] = "Español", [5] = "日本語", [6] = "Nederlands",
+        [8] = "Dansk", [9] = "Svenska", [10] = "Português"
+    };
+
+    public static bool TryReadLanguage(byte[]? raw, out string language)
+    {
+        language = "";
+        if (!TryPositiveRead(raw, 0x024A, out var data) || data.Length != 1 ||
+            !LanguageNames.TryGetValue(data[0], out var name)) return false;
+        language = name;
+        return true;
+    }
+
+    /// <summary>
+    /// Exact bit fields from original DID 0222 read/write handlers: day[15:11],
+    /// month[10:7], year-code[6:0], transmitted big endian. This does not assign
+    /// 1900/1980/2000 as the year origin and must not produce a calendar date.
+    /// </summary>
+    public static bool TryReadManufactureDateParts(byte[]? raw, out int day, out int month, out int yearCode)
+    {
+        day = month = yearCode = 0;
+        if (!TryPositiveRead(raw, 0x0222, out var data) || data.Length != 2) return false;
+        int packed = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(data);
+        int candidateDay = packed >> 11, candidateMonth = (packed >> 7) & 15, candidateYear = packed & 127;
+        if (candidateDay is < 1 or > 31 || candidateMonth is < 1 or > 12 || candidateYear == 0) return false;
+        day = candidateDay; month = candidateMonth; yearCode = candidateYear;
+        return true;
+    }
+
+    public static string RawInterpretation(byte[] raw, int did)
+    {
+        if (did == 0x0222 && TryReadManufactureDateParts(raw, out int day, out int month, out int yearCode))
+            return $"День: {day}; месяц: {month}; код года: {yearCode}. Полный календарный год не установлен.";
+        if (did == 0x0245) return "Сохранённый максимум скорости поездки. Масштаб и единицы счётчика не установлены.";
+        if (did == 0x0230) return "Код аппаратного варианта. Таблица вариантов не установлена.";
+        if (did == 0x024B) return "Сырой код единиц. Название km/mi отдельно не подтверждено.";
+        return "Расшифровка значения не подтверждена.";
+    }
 
     /// <summary>
     /// On this bike, DID 0249 returned 00 23 80 5E (2,326,622).
@@ -60,14 +119,7 @@ public static class BuiResearch
 
     public static byte[] BuildReadRequest(int did)
     {
-        if (!IsAllowed(did)) throw new ArgumentOutOfRangeException(nameof(did), "Only explicitly catalogued read-only BUI DIDs are allowed.");
-        // Clone the exact packet layout that already read DID 0220 on the bike.
-        // Host SWA sequence = 0. CAN record occupies bytes 8..18,
-        // CID 003A big-endian at 8..9; ISO-TP request at 11..14.
-        var request = Protocol.ReadBui();
-        request[13] = (byte)(did >> 8);
-        request[14] = (byte)did;
-        return request;
+        return InitialSwaTransport.BuildBuiRead(did);
     }
 
     /// <summary>
@@ -77,19 +129,7 @@ public static class BuiResearch
     /// </summary>
     public static bool TryPositiveRead(byte[]? raw, int did, out byte[] value)
     {
-        value = Array.Empty<byte>();
-        if (!IsAllowed(did) || raw == null || raw.Length != Protocol.Len) return false;
-        if (raw[0] != 2 || raw[1] != 0 || raw[2] != 0 || raw[3] != 0 ||
-            raw[6] != 2 || raw[7] != 1 || raw[8] != 0 || raw[9] != 0x3D)
-            return false;
-        int dlc = raw[10], singleFrameSize = raw[11];
-        if (dlc < 5 || dlc > 8 || singleFrameSize != dlc - 1 ||
-            singleFrameSize < 4 || singleFrameSize > 7)
-            return false;
-        if (raw[12] != 0x62 || raw[13] != (byte)(did >> 8) || raw[14] != (byte)did)
-            return false;
-        int size = singleFrameSize - 3; // excludes UDS SID and two DID bytes
-        value = raw.AsSpan(15, size).ToArray();
-        return true;
+        return InitialSwaTransport.TryReadPositiveBui(raw, did, out value);
     }
 }
+

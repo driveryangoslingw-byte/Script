@@ -165,4 +165,48 @@ Assert(!BuiResearch.TryReadHardwareVersion(hardwareNegative, out _),
 var hardwareShort = hardwareResponse.ToArray(); hardwareShort[10] = 6; hardwareShort[11] = 5;
 Assert(!BuiResearch.TryReadHardwareVersion(hardwareShort, out _),
     "hardware version requires exactly four bytes");
+byte[] Reply(int did, params byte[] value) {
+    var frame = response.ToArray();
+    frame[10] = (byte)(value.Length + 4); frame[11] = (byte)(value.Length + 3);
+    frame[13] = (byte)(did >> 8); frame[14] = (byte)did;
+    Array.Fill(frame, (byte)0xAA, 15, 49); value.CopyTo(frame, 15);
+    return frame;
+}
+foreach (var item in new (byte Code, string Name)[] {
+    (0,"Deutsch"),(1,"English"),(2,"Français"),(3,"Italiano"),(4,"Español"),
+    (5,"日本語"),(6,"Nederlands"),(8,"Dansk"),(9,"Svenska"),(10,"Português")
+}) Assert(BuiResearch.TryReadLanguage(Reply(0x024A, item.Code), out var name) && name == item.Name,
+    $"original firmware language column {item.Code}");
+foreach (byte code in new byte[] { 7, 11, 255 })
+    Assert(!BuiResearch.TryReadLanguage(Reply(0x024A, code), out var name) && name == "", "unknown language never guessed");
+Assert(!BuiResearch.TryReadLanguage(Reply(0x024B, 1), out _), "units code cannot be interpreted as language");
+Assert(!BuiResearch.TryReadLanguage(Reply(0x024A, 1, 0), out _), "language must contain exactly one byte");
+var languageNegative = Reply(0x024A, 1); languageNegative[12] = 0x7F;
+Assert(!BuiResearch.TryReadLanguage(languageNegative, out _), "negative service cannot become language");
+Assert(BuiResearch.TryReadManufactureDateParts(Reply(0x0222, 0x13, 0x16), out int day, out int month, out int yearCode) &&
+    day == 2 && month == 6 && yearCode == 22, "packed date 13 16 yields parts only, not 2019/week22");
+foreach (ushort packed in new ushort[] { 0, 0x0081, 0x0801, 0x0E81, 0x0880 })
+    Assert(!BuiResearch.TryReadManufactureDateParts(Reply(0x0222, (byte)(packed >> 8), (byte)packed), out _, out _, out _),
+        "invalid packed date fields do not produce a calendar date");
+Assert(!BuiResearch.TryReadManufactureDateParts(Reply(0x0221, 0x13, 0x16), out _, out _, out _), "date requires matching DID");
+Assert(!BuiResearch.TryReadManufactureDateParts(Reply(0x0222, 0x13), out _, out _, out _), "date requires exactly two bytes");
+Assert(BuiResearch.RawInterpretation(Reply(0x0222, 0x13, 0x16), 0x0222).Contains("код года: 22") &&
+    !BuiResearch.RawInterpretation(Reply(0x0222, 0x13, 0x16), 0x0222).Contains("2022"), "date text does not invent year origin");
+Assert(BuiResearch.Targets.Single(t => t.Did == 0x0222).EvidenceStatus == "RAW_ONLY" &&
+    BuiResearch.Targets.Single(t => t.Did == 0x0222).UsbReplyObserved, "partial date remains raw despite historical USB reply");
+Assert(BuiResearch.Targets.Single(t => t.Did == 0x0250).EvidenceStatus == "NOT_TESTED" &&
+    !BuiResearch.Targets.Single(t => t.Did == 0x0250).UsbReplyObserved, "NO_DEVICE is not a diagnostic test");
+foreach (var target in BuiResearch.Targets) {
+    var single = InitialSwaTransport.BuildBuiRead(target.Did);
+    Assert(single[2] == 0 && single[8] == 0 && single[9] == 0x3A && single[12] == 0x22 &&
+        single.Skip(15).All(b => b == 0), "all catalogue requests remain initial read-only frames");
+}
+var transportReply = Reply(0x024A, 1);
+Assert(InitialSwaTransport.TryReadBuiSingleFrame(transportReply, out var uds) &&
+    uds.SequenceEqual(new byte[] { 0x62, 2, 0x4A, 1 }), "transport parser respects CAN/ISO-TP length and ignores RAM tail");
+transportReply[11] = 0x10;
+Assert(!InitialSwaTransport.TryReadBuiSingleFrame(transportReply, out _), "initial module rejects segmented ISO-TP instead of pretending to reassemble");
+transportReply = Reply(0x024A, 1); transportReply[7] = 0;
+Assert(!InitialSwaTransport.TryReadBuiSingleFrame(transportReply, out _), "generic CAN route is outside verified local-reply module");
 Console.WriteLine($"{assertions} protocol assertions PASS");
+
