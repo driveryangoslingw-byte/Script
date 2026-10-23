@@ -304,6 +304,26 @@ public sealed class DiagnosticRunner
                 // For other catalogued BUI DIDs only the transport/CAN/UDS envelope
                 // is checked. Do not interpret bytes or count a verified ECU value
                 // until semantics are independently validated on this device.
+                // Owner-provided Intuvia odometer = 2326.6 km and device raw
+                // DID 0249 = 00 23 80 5E = 2,326,622 metres, matching after
+                // km/1000 conversion and display rounding. Exact DID and four
+                // bytes are required before counting as a confirmed value.
+                if (options.ResearchDid == 0x0249 &&
+                    BuiResearch.TryReadOdometer(raw, out uint metres, out string kilometres))
+                {
+                    report.Values.Add(new DiagnosticValue {
+                        Ecu = "BUI", Cid = "003D", Did = "0249",
+                        Name = "Общий пробег Intuvia",
+                        Value = kilometres + " km",
+                        RawDataHex = Protocol.Hex(raw.Skip(15).Take(4).ToArray())
+                    });
+                    report.Outcome = "BUI_ODOMETER_READ";
+                    report.SessionStatus = "READ_RESPONSE_CONFIRMED";
+                    report.EcuStatus = "BUI_READ_CONFIRMED";
+                    Record("classify", "session",
+                        $"BUI 0249: {metres} metres = {kilometres} km; compared with owner Intuvia 2326.6 km reading. No further writes.");
+                    return;
+                }
                 if (options.ResearchDid != 0x0220 &&
                     BuiResearch.TryPositiveRead(raw, options.ResearchDid, out var candidate))
                 {
