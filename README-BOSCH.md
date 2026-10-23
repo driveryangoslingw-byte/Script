@@ -1,8 +1,25 @@
-# Bosch BES2 USB Transport Lab 4.1 — Android (read-only)
+# Bosch BES2 USB Transport Lab 4.2 — Android (read-only)
 
 Experimental tool for **Bosch BES2 Intuvia** HID device `108C:0155`, not Bosch BES3 / Smart System. **USB handshake confirmed on user hardware; ECU diagnostics are not yet confirmed.**
 
-## New in 4.1 — test the real published command directly
+## New in 4.2 — inspect handshake negotiation without ECU requests
+
+The fresh 4.1 hardware log confirms:
+- HID Report Descriptor is 29 bytes, vendor-defined usage page 0xFF00, **no Report IDs**. Both IN and OUT HID reports are **64 bytes**. Report-ID padding is not the cause.
+- Original `00 00 03 03 02 01` returns `00 01 02`, selecting Sliding Window A.
+- Direct BUI `CID 3A, DID 0220` and exactly published BMS `CID 3C, DID F130` both return `00 FF` on the next transfer. Their UDS services did not reach a verifiable ECU reply.
+- The exact original BMS published reference bytes match our packet builder. `00 FF` may represent a transport error or an unavailable session; **its reason is not proven**.
+
+The published Bosch eBike HIM notes three **handshake preference lists**: `321`, `213`, and `123`. Added **8 · Probe selected handshake only**:
+1. Connect the powered, stationary bike.
+2. Choose one of the three preference lists from the second dropdown.
+3. Click button 8: transmits just one 64-byte handshake, without any diagnostic or motor command.
+4. Read the resulting negotiated mode in the status (1=Legacy, 2=Sliding A, 3=Sliding B, other=unverified).
+5. Reconnect / power-cycle as appropriate before trying a different preference; each individual test should start from a fresh connection.
+
+**Do not assume a successful negotiation of Legacy or Sliding Window B permits sending the Sliding Window A data framing.** Only observe handshake outcomes. This is protocol research, not a fix confirmed on hardware.
+
+## Existing in 4.1 — published command direct reading
 Version 4.0 never reached the DID read when a speculative TesterPresent failed. The published Bosch eBike HIM document actually shows a direct ISO-TP ReadDataByIdentifier frame without a prerequisite heartbeat and says the first empty request is optional.
 
 Added three independent read-only actions:
@@ -18,7 +35,7 @@ All active probes send **at most one ECU diagnostic request per click** (guided 
 ## Install and test
 Open the latest successful GitHub Actions workflow **Bosch BES2 Android APK** for branch `bosch-usb-tablet`. Download artifact `Bosch-BES2-Diagnostic-APK`, unzip and install `app-debug.apk`. Connect the powered stationary bike to your Android tablet via USB data cable.
 
-For the next test: `1 Find/Connect` -> `7 Inspect USB HID report descriptor` -> `3 DIRECT read` with Display BUI CID 3A -> `4 PUBLISHED BMS example`. Each direct action negotiates a fresh handshake and sends just one DID read. Report the raw HEX and complete status from each. Redact device serial numbers before sharing JSON.
+For the next test: `1 Find/Connect` -> choose `213` in handshake preference dropdown -> `8 Probe selected handshake only`. Read the reported mode. On a fresh connection, also test `123`. We already have a confirmed `321 => 00 01 02` baseline, and the two direct DID probes returned `00 FF`; do not need to repeat them. Report the full raw HEX and negotiated mode. Redact device serial numbers before sharing JSON.
 
 ## Technical and safety limitations
 - Live hardware so far: 64-byte interrupt transfers, VID:PID `108C:0155`, OUT endpoint `01`, IN `81`, USB handshake accepted `00 01 02`.
