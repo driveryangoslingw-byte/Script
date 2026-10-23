@@ -2,10 +2,12 @@ package online.wixed.boschusb;
 import java.util.Arrays;
 import java.util.Locale;
 
-/** Bosch BES2 Intuvia HID research framing. Only 0x22 read requests are constructed. */
+/** Bosch BES2 Intuvia HID research framing. Requests are read-only; TesterPresent is experimental. */
 public final class Protocol {
   private Protocol(){}
   public static final int VID=0x108C, PID=0x0155, LEN=64;
+  /** Literal published battery part-number probe (legacy CID may no longer be routed). */
+  public static final int DOCUMENTED_BATTERY_CID=0x3C, DOCUMENTED_BATTERY_DID=0xF130;
   public static final int[] BUI={0x0220,0x0221,0x0222,0x0223,0x0224,0x0225,0x0226,0x0227,0x0228,0x0230,0x0231,0x0240,0x0241,0x0242,0x0243,0x0245,0x0246,0x0247,0x0248,0x0249,0x024A,0x024B,0x024C,0x024D,0x0250,0x0251,0x0264,0x0282,0x0283,0x0284,0x0285};
   public static final int[] DU={0xF130,0xF131,0xF133,0xF134,0xF139,0xF150,0xF151,0xF180};
   public static final int[] BMS={0xF130,0xF131,0xF132,0xF133,0xF134,0xF150,0xF151,0xF180};
@@ -50,6 +52,9 @@ public final class Protocol {
     byte[] a=new byte[LEN];a[0]=2;a[1]=(byte)seq;a[2]=7;a[4]=(byte)255;a[5]=(byte)255;a[6]=11;
     a[10]=(byte)cid;a[11]=4;a[12]=3;a[13]=0x22;a[14]=(byte)(did>>8);a[15]=(byte)did;return a;
   }
+  /** The exact single-frame request published in Bosch eBike HIM: 02 00 07 00 FF FF 0B 00 00 00 3C 04 03 22 F1 30.
+   * It does not establish that this old address is alive on the attached bike. */
+  public static byte[] publishedBatteryRequest(){return read(DOCUMENTED_BATTERY_CID,DOCUMENTED_BATTERY_DID,0);}
   public static String hex(byte[] bytes){StringBuilder s=new StringBuilder();for(byte b:bytes){if(s.length()>0)s.append(' ');s.append(String.format(Locale.US,"%02X",b&255));}return s.toString();}
 
   /** Parsed strictly using the published 64-byte HMI envelope + ISO-TP single frame.
