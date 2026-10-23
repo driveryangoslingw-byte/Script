@@ -16,6 +16,24 @@ public final class ProtocolSelfTest {
    check(Protocol.summary(new byte[]{2,0,0x62,2,0x21},0x0220).equals("UNCLASSIFIED_RAW"),"not wrong DID");
    check(Protocol.dids(3).length==8&&Protocol.cid(3)==0x3b,"drive research profile");
    check(Protocol.dids(4).length==8&&Protocol.cid(4)==0x3c,"battery research profile");
-   System.out.println("10 Bosch BES2 protocol tests PASS");
+
+   check(Protocol.DISCOVERY_CIDS.length==7,"bounded CIDs");
+   check(Protocol.DISCOVERY_CIDS[0]==0x20&&Protocol.DISCOVERY_CIDS[6]==0x5F,"published heartbeat candidates");
+   check(Protocol.MAX_TRANSPORT_REJECTS==3&&Protocol.MIN_PROBE_DELAY_MS>=1000,"rate limit");
+   byte[] p=Protocol.testerPresent(0x39,0);
+   check(p.length==64,"tester length");
+   check((p[10]&255)==0x39&&(p[11]&255)==3&&(p[12]&255)==2&&(p[13]&255)==0x3E&&p[14]==0,"tester framing");
+   check((p[6]&255)==10,"tester declared length");
+   check(Protocol.testerSummary(new byte[]{0,(byte)255,0}).equals("TRANSPORT_REJECTED_00_FF"),"tester rejection");
+   check(Protocol.transportSummary(new byte[]{0,(byte)255,0}).equals("TRANSPORT_ERROR_00_FF"),"transport rejection");
+   check(Protocol.transportSummary(new byte[]{0,1,2}).equals("HANDSHAKE_ACCEPTED_A"),"transport handshake");
+   byte[] candidate=new byte[64];candidate[0]=2;candidate[12]=0x7E;candidate[13]=0;
+   check(Protocol.testerSummary(candidate).equals("TESTER_PRESENT_CANDIDATE_UNVERIFIED"),"tester candidate");
+   byte[] invalid=new byte[64];invalid[0]=2;invalid[1]=0x7E;invalid[2]=0;
+   check(Protocol.testerSummary(invalid).equals("NO_VERIFIED_TESTER_REPLY"),"reject header match");
+   check(Protocol.testerSummary(new byte[]{2,0,0,0,0,0,0,0,0,0,0,0x7F,0x3E,0x31}).equals("UDS_TESTER_NEGATIVE_0x31"),"tester negative");
+   check(Protocol.transportSummary(new byte[]{2,0,7,0}).equals("HID_DATA_FRAME_UNVERIFIED"),"unknown body");
+   System.out.println("23 Bosch BES2 protocol tests PASS");
+
  }
 }
