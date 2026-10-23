@@ -2,7 +2,7 @@ namespace BoschBES2Auto;
 
 /// <summary>
 /// A bounded list of publicly described BUI ReadDataByIdentifier candidates.
-/// 0220 and 0249 have matched the owner's physical Intuvia, with 0249 cross-checked against its odometer display.
+/// 0220 and 0249 are hardware-verified, and 0221 matches a published Bosch DiagnosticTool hardware-version example.
 /// Each run starts from a new handshake and sends exactly one read request.
 /// </summary>
 public static class BuiResearch
@@ -14,7 +14,7 @@ public static class BuiResearch
 
     public static readonly IReadOnlyList<DidTarget> Targets = new[] {
         new DidTarget(0x0220, "Версия ПО Intuvia", true),
-        new DidTarget(0x0221, "Версия аппаратного обеспечения", false),
+        new DidTarget(0x0221, "Версия аппаратного обеспечения Intuvia", true),
         new DidTarget(0x0222, "Дата производства", false),
         new DidTarget(0x0249, "Общий пробег Intuvia (метры → км)", true),
         new DidTarget(0x024A, "Язык интерфейса", false),
@@ -37,6 +37,21 @@ public static class BuiResearch
         if (!TryPositiveRead(raw, 0x0249, out var data) || data.Length != 4) return false;
         metres = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(data);
         kilometres = (metres / 1000m).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        return true;
+    }
+
+    /// <summary>
+    /// DID 0221 raw 00 00 02 02 was observed repeatedly on this bicycle.
+    /// Bosch DiagnosticTool manual (IBD v7.1+) page 26 independently shows
+    /// hardware version 0.0.2.2 for a BUI255/Intuvia with SW 5.9.2.0.
+    /// Only single-frame positive UDS 62 02 21 with exactly four bytes
+    /// is interpreted as dotted decimal version (no writing).
+    /// </summary>
+    public static bool TryReadHardwareVersion(byte[]? raw, out string version)
+    {
+        version = "";
+        if (!TryPositiveRead(raw, 0x0221, out var data) || data.Length != 4) return false;
+        version = $"{data[0]}.{data[1]}.{data[2]}.{data[3]}";
         return true;
     }
 
