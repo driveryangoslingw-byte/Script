@@ -124,4 +124,27 @@ bool rejectedUnknown = false;
 try { BuiResearch.BuildReadRequest(0xF130); } catch (ArgumentOutOfRangeException) { rejectedUnknown = true; }
 Assert(rejectedUnknown, "non-catalogued BMS request fails before any USB activity");
 
+
+var odoResponse = response.ToArray();
+odoResponse[14] = 0x49;
+odoResponse[15] = 0x00; odoResponse[16] = 0x23;
+odoResponse[17] = 0x80; odoResponse[18] = 0x5E;
+Assert(BuiResearch.Targets.Single(t=>t.Did==0x0249).HardwareConfirmed,
+    "BUI odometer 0249 is cross-checked with the actual Intuvia display");
+Assert(BuiResearch.TryReadOdometer(odoResponse, out uint metres, out string kms) &&
+    metres==2326622 && kms=="2326.6",
+    "USB bytes 00 23 80 5E decode as 2,326,622 metres = 2326.6 km display");
+var odoWrongDid = odoResponse.ToArray(); odoWrongDid[14] = 0x21;
+Assert(!BuiResearch.TryReadOdometer(odoWrongDid, out _, out _),
+    "wrong DID cannot be interpreted as odometer");
+var odoShort = odoResponse.ToArray(); odoShort[10] = 7; odoShort[11] = 6;
+Assert(!BuiResearch.TryReadOdometer(odoShort, out _, out _),
+    "odometer requires exactly four metres bytes and an 8-byte CAN frame");
+var odoNegative = odoResponse.ToArray(); odoNegative[12] = 0x7F;
+Assert(!BuiResearch.TryReadOdometer(odoNegative, out _, out _),
+    "a negative service response cannot become an odometer");
+var odoMax = odoResponse.ToArray(); odoMax[15]=0xFF;odoMax[16]=0xFF;odoMax[17]=0xFF;odoMax[18]=0xFF;
+Assert(BuiResearch.TryReadOdometer(odoMax, out metres, out kms) &&
+    metres==uint.MaxValue && kms=="4294967.3",
+    "unsigned big-endian metres counter decodes safely without signed overflow");
 Console.WriteLine($"{assertions} protocol assertions PASS");
