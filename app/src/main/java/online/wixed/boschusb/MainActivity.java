@@ -19,6 +19,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
 import java.io.OutputStream;
+import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
@@ -41,7 +42,7 @@ public final class MainActivity extends Activity {
   private TextView stateText, progressText, traceText, resultText;
   private CheckBox initialCheck;
   private Spinner profileSpinner,handshakeSpinner;
-  private volatile boolean busy=false, cancel=false;
+  private volatile boolean busy=false, cancel=false, pendingAuto=false;
   private String exportData="";
   private int count=0;
   private final BroadcastReceiver usbReceiver=new BroadcastReceiver(){
@@ -53,12 +54,12 @@ public final class MainActivity extends Activity {
         boolean real=device!=null&&manager.hasPermission(device);
         post("USB permission callback="+callback+", actual="+real);
         if(d!=null && (d.getVendorId()!=Protocol.VID||d.getProductId()!=Protocol.PID))return;
-        if(real)worker.execute(()->open(device));
-        else updateState("USB access denied. Select Allow on Android USB dialog.",false);
+        if(real)worker.execute(()->{open(device);afterUsbOpened();});
+        else {pendingAuto=false;updateState("USB access denied. Select Allow on Android USB dialog.",false);}
       }else if(UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)){
         UsbDevice d=deviceFrom(intent);
         if(d!=null&&d.getVendorId()==Protocol.VID&&d.getProductId()==Protocol.PID){
-          cancel=true;
+          cancel=true;pendingAuto=false;
           updateState("Bosch USB disconnected",false);
           worker.execute(()->closeConnection());
         }
@@ -77,7 +78,7 @@ public final class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33)registerReceiver(usbReceiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(usbReceiver,f);
     buildUI();
-    post("BES2 4.2: handshake preference testing + documented read-only diagnostics.");
+    post("BES2 4.3: one-tap automated read-only diagnosis with bounded stop conditions.");
     post("This is not a speed-unlock tool; device-specific read responses remain unverified.");
   }
   private TextView text(String message,int size,int color){
@@ -96,49 +97,24 @@ public final class MainActivity extends Activity {
     root.setBackgroundColor(0xff0b1424);
     root.setPadding(22,18,22,38);
     scroll.addView(root);
-    TextView head=text("BOSCH BES2  •  TRANSPORT LAB 4.2",22,0xff87dcff);
+    TextView head=text("BOSCH BES2  •  ONE-TAP DIAGNOSTICS 4.3",22,0xff87dcff);
     head.setTypeface(null,Typeface.BOLD);add(root,head);
-    add(root,text("Intuvia / E-Bike HMI 108C:0155 | FREE · OFFLINE",13,0xffacc0d8));
-    stateText=text("Not connected",17,0xffffc878);add(root,stateText);
-    button(root,"1 · Find Bosch / Connect",this::connect);
-    button(root,"2 · Check USB handshake",()->runProbe());
-    add(root,text("DIAGNOSTIC PROFILE (select the component / channel)",14,0xff87dcff));
-    profileSpinner=new Spinner(this);
-    ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,Protocol.PROFILES);
-    adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-    profileSpinner.setAdapter(adapter);
-    profileSpinner.setBackgroundColor(0xffc8d7ec);
-    add(root,profileSpinner);
-    initialCheck=new CheckBox(this);initialCheck.setText("Include first empty frame (published sequence)");
-    initialCheck.setTextColor(0xffe4efff);initialCheck.setChecked(true);add(root,initialCheck);
-    add(root,text("CID values are research candidates, not verified ECU addresses. The original Bosch heartbeat bytes are NOT publicly verified.",12,0xffffd08b));
-    button(root,"3 · DIRECT read / selected CID (no heartbeat)",()->directRead(false));
-    button(root,"4 · PUBLISHED BMS example (CID 3C, DID F130)",()->directRead(true));
-    button(root,"5 · Guided handshake / tester / DID",this::guidedRead);
-    button(root,"6 · Passive USB receive (no CID traffic)",this::passiveListen);
-    button(root,"7 · Inspect USB HID report descriptor (read-only)",this::inspectHid);
-    add(root,text("HANDSHAKE PREFERENCE (safe transport-only research)",14,0xff87dcff));
-    handshakeSpinner=new Spinner(this);
-    ArrayAdapter<String> handshakeAdapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,
-      new String[]{"321 · original (returns A on your bike)","213 · alternative documented preference","123 · alternative documented preference"});
-    handshakeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-    handshakeSpinner.setAdapter(handshakeAdapter);
-    handshakeSpinner.setBackgroundColor(0xffc8d7ec);add(root,handshakeSpinner);
-    button(root,"8 · Probe selected handshake only (no ECU traffic)",this::probeHandshakePreference);
-    
-    add(root,text("DIRECT sends handshake + exactly one ReadDataByIdentifier (0x22) frame, with sequence 0 and no mandatory TesterPresent. PUBLISHED replays the documented BMS packet. Test handshake preference 321, 213 or 123 independently with button 8: no DID, no heartbeat, no CAN payload. Legacy CID 3C may be unavailable. Stops on 00 FF.",12,0xffffd08b));
-
-    button(root,"Stop requests",()->{cancel=true;post("Stop requested.");});
-    progressText=text("Read: 0 confirmed",14,0xffc9ddf6);add(root,progressText);
-    resultText=text("Results appear here",13,0xffd5f5cd);
+    add(root,text("Intuvia / BES2 · USB 108C:0155 · offline, read-only",14,0xffacc0d8));
+    stateText=text("Connect the stationary, powered-on bike via a USB data cable.",16,0xffffc878);
+    add(root,stateText);
+    button(root,"▶  START AUTOMATIC DIAGNOSIS",this::oneTap);
+    add(root,text("One button connects USB (Android may ask permission), inspects HID, tests the 3 published handshake preferences and performs one documented read-only probe if Sliding Window A works. Stops on 00 FF / unknown responses.",13,0xffd3e7fb));
+    button(root,"■  STOP",()->{cancel=true;pendingAuto=false;post("Stop requested.");});
+    progressText=text("Ready · no ECU readings confirmed",15,0xffc9ddf6);add(root,progressText);
+    resultText=text("Automatic results will appear here.",14,0xffd5f5cd);
     resultText.setTextIsSelectable(true);add(root,resultText);
-    button(root,"Save full diagnostic JSON",this::saveReport);
-    button(root,"Copy report to clipboard",this::copyReport);
+    button(root,"Save diagnostic JSON to a file",this::saveReport);
+    button(root,"Copy diagnostic JSON",this::copyReport);
     button(root,"Clear screen / results",this::clearScreen);
-    add(root,text("RAW USB TRACE (contains serials and device IDs; review before sharing)",12,0xffffd08b));
+    add(root,text("RAW USB TRACE  ·  May contain serial numbers: review before sharing.",12,0xffffd08b));
     traceText=text("",12,0xffa9c7ea);traceText.setTypeface(Typeface.MONOSPACE);
     traceText.setTextIsSelectable(true);add(root,traceText);
-    add(root,text("Read-only: USB handshake, UDS ReadDataByIdentifier (0x22), experimental TesterPresent (0x3E), and standard USB descriptor inspection. No configuration writes, resets, flash, or speed-limit edits.",12,0xffa6b9cf));
+    add(root,text("Transport protocol remains partially undocumented. No security access, programming, parameter writes, firmware or speed-limit modifications.",12,0xffa6b9cf));
     setContentView(scroll);
   }
   private void post(String message){
@@ -159,9 +135,9 @@ public final class MainActivity extends Activity {
     for(UsbDevice d:manager.getDeviceList().values()){
       if(d.getVendorId()==Protocol.VID&&d.getProductId()==Protocol.PID){selected=d;break;}
     }
-    if(selected==null){updateState("Bosch 108C:0155 not found. Check USB OTG and cable.",false);return;}
+    if(selected==null){pendingAuto=false;updateState("Bosch 108C:0155 not found. Check USB OTG and cable.",false);return;}
     device=selected;post("Detected USB device "+device.getDeviceName()+" with "+device.getInterfaceCount()+" interface(s).");
-    if(manager.hasPermission(device)){worker.execute(()->open(device));return;}
+    if(manager.hasPermission(device)){worker.execute(()->{open(device);afterUsbOpened();});return;}
     Intent intent=new Intent(USB_ACTION).setPackage(getPackageName());
     int flags=PendingIntent.FLAG_UPDATE_CURRENT;
     if(Build.VERSION.SDK_INT>=31)flags|=PendingIntent.FLAG_MUTABLE;
@@ -170,7 +146,6 @@ public final class MainActivity extends Activity {
     updateState("Accept the Android USB permission prompt",false);
   }
   private synchronized void open(UsbDevice target){
-    if(busy)return;
     closeConnection();
     try{
       if(target==null||!manager.hasPermission(target))throw new Exception("USB permission unavailable");
@@ -232,6 +207,119 @@ public final class MainActivity extends Activity {
       try{op.run();}finally{busy=false;}
     });
   }
+  /** One user action, including USB permission continuation. */
+  private void oneTap(){
+    if(busy||pendingAuto){post("Automatic diagnosis is already running or awaiting USB permission.");return;}
+    pendingAuto=true;cancel=false;
+    updateState("Starting automatic USB connection...",true);
+    connect();
+  }
+  private void afterUsbOpened(){
+    if(!pendingAuto)return;
+    pendingAuto=false;
+    if(conn==null||in==null){updateState("Automatic diagnosis cannot open the Bosch USB interface.",false);return;}
+    startJob(this::automaticFlow);
+  }
+  private void autoResult(String label,String status,String raw){
+    JSONObject row=new JSONObject();
+    try{row.put("mode","AUTO_ONE_TAP");row.put("step",label);row.put("status",status);row.put("raw",raw);}
+    catch(Exception ignored){}
+    synchronized(values){values.add(row);}
+    final String line=label+" → "+status;
+    post("AUTO RESULT "+line);
+    ui.post(()->resultText.append(line+"\n"));
+  }
+  private void ensureNotStopped()throws Exception{
+    if(cancel)throw new Exception("Stopped by user");
+    if(device==null||conn==null||in==null)throw new Exception("USB is disconnected");
+  }
+  private void reopenForAuto()throws Exception{
+    ensureNotStopped();
+    UsbDevice target=device;
+    closeConnection();
+    open(target);  // software USB-interface reopen is NOT a bicycle power cycle
+    ensureNotStopped();
+  }
+  /** The only automatic diagnostic run.
+   * Observes all three published negotiation preferences, always opening
+   * a new USB connection before switching. No speculative CID sweep.
+   * Exactly one published read-only ECU packet is allowed after a verified
+   * Sliding Window A negotiation; any unknown/rejected reply ends the run.
+   */
+  private void automaticFlow(){
+    String outcome="Incomplete";
+    try{
+      post("AUTO BEGIN: HID descriptor + preferences 321, 213, 123 + one documented BMS read.");
+      post("No Bosch proprietary heartbeat implementation is known. A transport handshake is not ECU authorization.");
+      ui.post(()->{resultText.setText("");progressText.setText("Working · reading USB descriptors");});
+      ensureNotStopped();
+      byte[] descriptor=new byte[512];
+      int n=conn.controlTransfer(0x81,0x06,0x2200,iface.getId(),descriptor,descriptor.length,1800);
+      if(n>0){
+        byte[] raw=Arrays.copyOf(descriptor,n);
+        record("USB_DESCRIPTOR",raw,"AUTO HID report descriptor (not motor data)");
+        autoResult("USB HID descriptor",n+" bytes; Report IDs="+Protocol.hidReportIds(raw),Protocol.hex(raw));
+      }else autoResult("USB HID descriptor","Unavailable ("+n+"); can still test USB handshake","");
+      for(int i=0;i<Protocol.HANDSHAKE_PATTERNS.length;i++){
+        ensureNotStopped();
+        if(i!=0)reopenForAuto();
+        String preference=Protocol.HANDSHAKE_PATTERNS[i];
+        final int step=i+1;
+        ui.post(()->progressText.setText("Working · handshake "+step+"/3"));
+        byte[] reply=exchange(Protocol.handshakeVariant(i),"AUTO transport handshake "+preference);
+        String mode=Protocol.handshakeResult(reply);
+        autoResult("Handshake "+preference,mode,Protocol.hex(reply));
+        if(!Protocol.negotiatedTransport(mode))
+          throw new Exception("Unexpected/failed handshake "+preference+": "+mode+". Stop; no ECU requests.");
+      }
+      // Re-select the confirmed A-mode baseline before one read-only request.
+      reopenForAuto();
+      byte[] base=exchange(Protocol.handshake(),"AUTO restore 321 for supported A transport");
+      String mode=Protocol.handshakeResult(base);
+      autoResult("Restore 321",mode,Protocol.hex(base));
+      if(!"HANDSHAKE_SLIDING_WINDOW_A".equals(mode))
+        throw new Exception("Sliding Window A was not selected; aborting UDS request.");
+      // A short non-transmitting receive capture; no incoming unsolicited
+      // frames has been observed on the user's hardware so far.
+      ui.post(()->progressText.setText("Working · passive USB capture"));
+      for(int i=0;i<2;i++){
+        ensureNotStopped();
+        byte[] buf=new byte[Protocol.LEN];
+        int countIn=conn.bulkTransfer(in,buf,Protocol.LEN,450);
+        if(countIn>0){
+          byte[] raw=Arrays.copyOf(buf,countIn);
+          record("IN",raw,"AUTO passive receive "+(i+1));
+          autoResult("Passive receive "+(i+1),Protocol.transportSummary(raw),Protocol.hex(raw));
+        }else post("AUTO passive window "+(i+1)+": no unsolicited USB packet");
+      }
+      ensureNotStopped();
+      ui.post(()->progressText.setText("Working · one documented read-only request"));
+      byte[] reply=exchange(Protocol.publishedBatteryRequest(),"AUTO published BMS CID 3C / DID F130 (single attempt)");
+      Protocol.Reply decoded=Protocol.parse(reply,0x22,Protocol.DOCUMENTED_BATTERY_DID);
+      autoResult("BMS 3C / DID F130",decoded.status,Protocol.hex(reply));
+      if("TRANSPORT_00_FF_UNDECODED".equals(decoded.status)){
+        outcome="USB accepted handshake, but returned 00 FF to the documented read. Cause remains unknown; stopped.";
+        updateState(outcome,false);
+      }else if("UDS_DID_MATCH_FRAME_CANDIDATE".equals(decoded.status)){
+        outcome="Received a candidate UDS reply. Its packet framing and provenance require validation.";
+        updateState(outcome,false);
+      }else{
+        outcome="USB replied "+decoded.status+"; no verified ECU values. Stopped.";
+        updateState(outcome,false);
+      }
+    }catch(Exception e){
+      outcome="AUTO STOP: "+e.getMessage();
+      updateState(outcome,false);
+    }finally{
+      final String result=outcome;
+      try(FileOutputStream output=openFileOutput("bosch-bes2-last-diagnostic.json",MODE_PRIVATE)){
+        output.write(buildReport().getBytes(StandardCharsets.UTF_8));
+        post("Report automatically saved inside the app: bosch-bes2-last-diagnostic.json");
+      }catch(Exception e){post("Automatic internal report save failed: "+e.getMessage());}
+      ui.post(()->progressText.setText("Finished · "+result+" · 0 verified ECU data values"));
+    }
+  }
+
   private void runProbe(){startJob(()->{
     try{
       byte[] r=exchange(Protocol.handshake(),"Bosch handshake");
@@ -443,7 +531,7 @@ public final class MainActivity extends Activity {
   private String buildReport(){
     JSONObject root=new JSONObject();
     try{
-      root.put("app","Bosch BES2 USB Lab 4.2 (experimental read-only)");
+      root.put("app","Bosch BES2 USB Lab 4.3 (one-tap, experimental read-only)");
       root.put("usb_vid_pid","108C:0155");
       root.put("hardware_validated",false);root.put("heartbeat_protocol_verified",false);root.put("sliding_window_a_full_implementation_verified",false);
       root.put("note","The JSON trace may include device serial numbers. Do not publish unredacted logs.");
