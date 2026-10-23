@@ -51,19 +51,83 @@ public final class Protocol {
     a[10]=(byte)cid;a[11]=4;a[12]=3;a[13]=0x22;a[14]=(byte)(did>>8);a[15]=(byte)did;return a;
   }
   public static String hex(byte[] bytes){StringBuilder s=new StringBuilder();for(byte b:bytes){if(s.length()>0)s.append(' ');s.append(String.format(Locale.US,"%02X",b&255));}return s.toString();}
-  public static String summary(byte[] b,int did){
-    if(b==null||b.length==0)return "NO RESPONSE";
-    if(b.length>=2&&b[0]==0&&(b[1]&255)==255)return "TRANSPORT_REJECTED_00_FF";
-    if(b.length>=3&&b[0]==0&&b[1]==1&&b[2]==2)return "HANDSHAKE_SLIDING_WINDOW_A";
-    if(b.length<4)return "SHORT_RESPONSE";
-    for(int i=1;i+3<=b.length;i++){
-      if((b[i]&255)==0x7F&&(b[i+1]&255)==0x22)return "UDS_NEGATIVE_0x"+String.format(Locale.US,"%02X",b[i+2]&255);
-      if((b[i]&255)==0x62&&(b[i+1]&255)==((did>>8)&255)&&(b[i+2]&255)==(did&255))
-        return "UDS_POSITIVE_RAW_UNVERIFIED";
-    }
-    return "UNCLASSIFIED_RAW";
-  }
 
+  /** Parsed strictly using the published 64-byte HMI envelope + ISO-TP single frame.
+   * Nothing is decoded from headers, unrelated offsets or unused zero padding.
+   */
+  public static final class Reply {
+    public final String status;
+    public final int responseCid;
+    public final int sequence;
+    public final int service;
+    public final int did;
+    Reply(String status,int cid,int sequence,int service,int did){
+      this.status=status;this.responseCid=cid;this.sequence=sequence;this.service=service;this.did=did;
+    }
+    public boolean framed(){return responseCid>=0;}
+  }
+  private static int u(byte b){return b&255;}
+  public static Reply parse(byte[] b,int requestedService,int expectedDid){
+    if(b==null||b.length==0)return new Reply("NO_RESPONSE",-1,-1,-1,-1);
+    if(b.length>=2&&u(b[0])==0&&u(b[1])==255)
+      return new Reply("TRANSPORT_00_FF_UNDECODED",-1,-1,-1,-1);
+    if(b.length>=3&&u(b[0])==0&&u(b[1])==1&&u(b[2])==2)
+      return new Reply("HANDSHAKE_SLIDING_WINDOW_A",-1,-1,-1,-1);
+    if(u(b[0])!=2)return new Reply("UNKNOWN_USB_FRAME",-1,-1,-1,-1);
+    if(b.length<14)return new Reply("SHORT_HMI_FRAME",-1,-1,-1,-1);
+    if(u(b[2])!=7||u(b[4])!=255||u(b[5])!=255)
+      return new Reply("HMI_HEADER_NOT_VALIDATED",-1,-1,-1,-1);
+    int declared=u(b[6]);
+    if(declared<11||declared>LEN-7||7+declared>b.length)
+      return new Reply("HMI_LENGTH_INVALID",-1,-1,-1,-1);
+    int cid=u(b[10]),messageLength=u(b[11]),isotpLength=u(b[12]);
+    if(messageLength<2||messageLength>declared-7||isotpLength!=messageLength-1)
+      return new Reply("ISO_TP_LENGTH_UNVERIFIED",-1,-1,-1,-1);
+    if(isotpLength>=8||13+isotpLength>b.length)
+      return new Reply("ISO_TP_SEGMENTED_UNSUPPORTED",-1,-1,-1,-1);
+    int sid=u(b[13]),seq=u(b[1]);
+    if(sid==0x7F&&isotpLength>=3&&u(b[14])==requestedService)
+      return new Reply("UDS_NEGATIVE_0x"+String.format(Locale.US,"%02X",u(b[15])),cid,seq,sid,-1);
+    if(requestedService==0x3E&&sid==0x7E&&isotpLength>=2&&u(b[14])==0)
+      return new Reply("UDS_TESTER_POSITIVE_FRAME_CANDIDATE",cid,seq,sid,-1);
+    if(requestedService==0x22&&sid==0x62&&isotpLength>=3){
+      int did=(u(b[14])<<8)|u(b[15]);
+      if(did==expectedDid)
+        return new Reply("UDS_DID_MATCH_FRAME_CANDIDATE",cid,seq,sid,did);
+      return new Reply("UDS_DID_MISMATCH",cid,seq,sid,did);
+    }
+    return new Reply("FRAMED_UNKNOWN_SERVICE",cid,seq,sid,-1);
+  }
+  public static String summary(byte[] b,int did){
+    String status=parse(b,0x22,did).status;
+    if(status.equals("TRANSPORT_00_FF_UNDECODED"))return "TRANSPORT_REJECTED_00_FF";
+    if(status.equals("UDS_DID_MATCH_FRAME_CANDIDATE"))return "UDS_POSITIVE_RAW_UNVERIFIED";
+    return status;
+  }
+  /** Bounded, fail-closed session tracker; an accepted handshake does not prove
+   * a functioning Sliding Window A implementation or a routed ECU session. */
+  public static final class Session {
+    private boolean handshakeOk;
+    private boolean failed;
+    private int sequence;
+    public boolean acceptHandshake(byte[] rx){
+      handshakeOk="HANDSHAKE_SLIDING_WINDOW_A".equals(parse(rx,0,0).status);
+      failed=!handshakeOk;sequence=0;return handshakeOk;
+    }
+    private void guard(){
+      if(!handshakeOk||failed)throw new IllegalStateException("Transport not ready or rejected");
+    }
+    public byte[] empty(){guard();return initial(sequence++);}
+    public byte[] tester(int cid){guard();return testerPresent(cid,sequence++);}
+    public byte[] readDid(int cid,int did){guard();return read(cid,did,sequence++);}
+    public Reply checked(byte[] rx,int service,int did){
+      guard();Reply r=parse(rx,service,did);
+      if(!r.framed())failed=true;
+      return r;
+    }
+    public int nextSequence(){return sequence;}
+    public boolean failed(){return failed;}
+  }
   /**
    * Bounded discovery candidates reported by community heartbeat experiments.
    * These are NOT verified write channels, keys or brute-force security values.
@@ -94,16 +158,10 @@ public final class Protocol {
     return "UNKNOWN_TRANSPORT_FRAME";
   }
   public static String testerSummary(byte[] b) {
-    if(b==null||b.length==0)return "NO_RESPONSE";
-    if(b.length>=2&&b[0]==0&&(b[1]&255)==255)return "TRANSPORT_REJECTED_00_FF";
-    if(b.length>=3&&b[0]==0&&b[1]==1&&b[2]==2)return "HANDSHAKE_ONLY";
-    // Only look inside likely message body, not untrusted header/padding.
-    for(int i=11;i+1<b.length;i++){
-      if((b[i]&255)==0x7E&&(b[i+1]&255)==0x00)return "TESTER_PRESENT_CANDIDATE_UNVERIFIED";
-      if(i+2<b.length&&(b[i]&255)==0x7F&&(b[i+1]&255)==0x3E)
-        return "UDS_TESTER_NEGATIVE_0x"+String.format(Locale.US,"%02X",b[i+2]&255);
-    }
-    return "NO_VERIFIED_TESTER_REPLY";
+    Reply reply=parse(b,0x3E,0);
+    if(reply.status.equals("TRANSPORT_00_FF_UNDECODED"))return "TRANSPORT_REJECTED_00_FF";
+    if(reply.status.equals("UDS_TESTER_POSITIVE_FRAME_CANDIDATE"))return "TESTER_PRESENT_CANDIDATE_UNVERIFIED";
+    return reply.status;
   }
   public static String didHex(int did){return String.format(Locale.US,"%04X",did);}
 }
