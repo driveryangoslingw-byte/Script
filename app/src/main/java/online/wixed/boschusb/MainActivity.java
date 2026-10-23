@@ -8,6 +8,9 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ContentValues;
+import android.net.Uri;
+import android.provider.MediaStore;
 import android.hardware.usb.*;
 import android.os.Build;
 import android.os.Bundle;
@@ -78,7 +81,7 @@ public final class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33)registerReceiver(usbReceiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(usbReceiver,f);
     buildUI();
-    post("BES2 4.4: one-tap evidence collection, current BUI route and early stop.");
+    post("BES2 4.5: one button, automatic protocol evidence and JSON saved to Downloads (Android 10+).");
     post("This is not a speed-unlock tool; device-specific read responses remain unverified.");
   }
   private TextView text(String message,int size,int color){
@@ -97,20 +100,20 @@ public final class MainActivity extends Activity {
     root.setBackgroundColor(0xff0b1424);
     root.setPadding(22,18,22,38);
     scroll.addView(root);
-    TextView head=text("BOSCH BES2  •  USB INVESTIGATION 4.4",22,0xff87dcff);
+    TextView head=text("BOSCH BES2  •  AUTO DIAGNOSTICS 4.5",22,0xff87dcff);
     head.setTypeface(null,Typeface.BOLD);add(root,head);
     add(root,text("Intuvia / BES2 · USB 108C:0155 · offline, read-only",14,0xffacc0d8));
     stateText=text("Connect the stationary, powered-on bike via a USB data cable.",16,0xffffc878);
     add(root,stateText);
-    button(root,"▶  START AUTOMATIC DIAGNOSIS",this::oneTap);
-    add(root,text("One button inspects USB HID, negotiates the observed 321 transport, captures 3 seconds of incoming traffic, then sends one read-only BUI query (CID 3A / DID 0220). Stops on 00 FF. No unsupported CID scans.",13,0xffd3e7fb));
+    button(root,"▶  START ALL TESTS / ЗАПУСТИТЬ",this::oneTap);
+    add(root,text("ONE BUTTON: connect to Bosch (Android may ask USB permission), read HID descriptor, test the already-confirmed USB handshake, listen for incoming data, attempt one read-only BUI request, explain the result and save JSON. On Android 10+, a file is also saved into Downloads automatically. Stops immediately on 00 FF; this is NOT an unlock tool.",13,0xffd3e7fb));
     button(root,"■  STOP",()->{cancel=true;pendingAuto=false;post("Stop requested.");});
     progressText=text("Ready · no ECU readings confirmed",15,0xffc9ddf6);add(root,progressText);
     resultText=text("Automatic results will appear here.",14,0xffd5f5cd);
     resultText.setTextIsSelectable(true);add(root,resultText);
-    button(root,"Save diagnostic JSON to a file",this::saveReport);
-    button(root,"Copy diagnostic JSON",this::copyReport);
-    button(root,"Clear screen / results",this::clearScreen);
+    button(root,"Export JSON manually (optional)",this::saveReport);
+    button(root,"Copy report (optional)",this::copyReport);
+    button(root,"Clear old results (optional)",this::clearScreen);
     add(root,text("RAW USB TRACE  ·  May contain serial numbers: review before sharing.",12,0xffffd08b));
     traceText=text("",12,0xffa9c7ea);traceText.setTypeface(Typeface.MONOSPACE);
     traceText.setTextIsSelectable(true);add(root,traceText);
@@ -250,10 +253,10 @@ public final class MainActivity extends Activity {
   private void automaticFlow(){
     String outcome="Incomplete";
     try{
-      post("AUTO BEGIN 4.4: USB HID descriptor -> 321 handshake -> passive capture -> one BUI read.");
+      post("AUTO BEGIN 4.5: one-button USB diagnostics + automatic JSON export.");
       post("Bike powered on with Intuvia installed (user confirmed). Legacy BMS CID 3C removed from auto probe.");
       post("This does not implement proprietary Bosch heartbeat / Sliding Window A internals.");
-      ui.post(()->{resultText.setText("");progressText.setText("Working · HID descriptor");});
+      ui.post(()->{resultText.setText("1/4  USB HID descriptor\n");progressText.setText("Step 1/4 · reading USB HID descriptor");});
       ensureNotStopped();
       byte[] descriptor=new byte[512];
       int n=conn.controlTransfer(0x81,0x06,0x2200,iface.getId(),descriptor,descriptor.length,1800);
@@ -263,7 +266,7 @@ public final class MainActivity extends Activity {
         autoResult("HID descriptor",n+" bytes; Report IDs="+Protocol.hidReportIds(raw),Protocol.hex(raw));
       }else autoResult("HID descriptor","Unavailable ("+n+"); continue with negotiated transport","");
       ensureNotStopped();
-      ui.post(()->progressText.setText("Working · 321 handshake"));
+      ui.post(()->progressText.setText("Step 2/4 · USB handshake (321)"));
       byte[] handshake=exchange(Protocol.handshake(),"AUTO single documented handshake 321");
       String mode=Protocol.handshakeResult(handshake);
       autoResult("Handshake 321",mode,Protocol.hex(handshake));
@@ -273,7 +276,7 @@ public final class MainActivity extends Activity {
 
       // Capture a longer quiet period to distinguish unsolicited input
       // from the prior 450ms receive-timeout observation. No USB output here.
-      ui.post(()->progressText.setText("Working · 3s passive capture (no outgoing packets)"));
+      ui.post(()->progressText.setText("Step 3/4 · capture incoming traffic for 3 seconds"));
       int passiveCount=0;
       for(int i=0;i<4;i++){
         ensureNotStopped();
@@ -290,7 +293,7 @@ public final class MainActivity extends Activity {
       autoResult("Passive 3s",passiveCount+" unsolicited IN packets","");
 
       ensureNotStopped();
-      ui.post(()->progressText.setText("Working · one BUI read, then stop"));
+      ui.post(()->progressText.setText("Step 4/4 · one read-only BUI query"));
       // This target was actually observed in the BES2 research's current CID
       // table, unlike the legacy BMS CID 3C used in app version 4.3.
       byte[] request=Protocol.read(Protocol.OBSERVED_BUI_CID,Protocol.OBSERVED_BUI_DID,0);
@@ -298,9 +301,10 @@ public final class MainActivity extends Activity {
       Protocol.Reply decoded=Protocol.parse(reply,0x22,Protocol.OBSERVED_BUI_DID);
       autoResult("BUI 3A / DID 0220",decoded.status,Protocol.hex(reply));
       if("TRANSPORT_00_FF_UNDECODED".equals(decoded.status)){
-        outcome="USB works; A handshake succeeds. BUI read returned 00 FF again. "+
-          "Reason not decoded: framing, route, or missing Bosch-specific session. "+
-          "Need a captured working BES2 diagnostic exchange to fix the protocol.";
+        outcome="USB CONNECTED / HANDSHAKE OK. Bosch returned 00 FF to its first read. "+
+          "This is an UNDECODED transport rejection (not a battery or motor error code). "+
+          "Further blind commands will not fix a missing Bosch Sliding Window A session. "+
+          "To implement that session, a capture from a WORKING BES2 diagnostic connection is needed.";
         updateState(outcome,false);
       }else if("UDS_DID_MATCH_FRAME_CANDIDATE".equals(decoded.status)){
         outcome="BUI raw reply candidate received; framing and ECU origin not validated.";
@@ -314,11 +318,49 @@ public final class MainActivity extends Activity {
       updateState(outcome,false);
     }finally{
       final String result=outcome;
-      ui.post(()->progressText.setText("Finished · "+result+" · 0 verified ECU values"));
+      ui.post(()->progressText.setText("Finished · see result below · 0 verified ECU values"));
+      autoResult("FINAL DIAGNOSIS",result,"");
+      String report=buildReport();
       try(FileOutputStream output=openFileOutput("bosch-bes2-last-diagnostic.json",MODE_PRIVATE)){
-        output.write(buildReport().getBytes(StandardCharsets.UTF_8));
-        post("Report saved inside app: bosch-bes2-last-diagnostic.json");
-      }catch(Exception e){post("Internal report save failed: "+e.getMessage());}
+        output.write(report.getBytes(StandardCharsets.UTF_8));
+        post("Automatic private backup: bosch-bes2-last-diagnostic.json");
+      }catch(Exception e){post("Private report backup failed: "+e.getMessage());}
+      saveToDownloads(report);
+    }
+  }
+
+  /**
+   * Android 10+ scoped-storage export: one click runs the test AND saves the
+   * result to public Downloads. No legacy storage permission or extra picker.
+   * Reports can contain identifiers and must be checked before sharing.
+   */
+  private void saveToDownloads(String report){
+    if(Build.VERSION.SDK_INT<29){
+      post("Automatic Downloads export requires Android 10+. Private copy is saved; use Export JSON manually.");
+      return;
+    }
+    Uri uri=null;
+    try{
+      String stamp=new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",Locale.US).format(new Date());
+      ContentValues values=new ContentValues();
+      values.put(MediaStore.Downloads.DISPLAY_NAME,"bosch-bes2-"+stamp+".json");
+      values.put(MediaStore.Downloads.MIME_TYPE,"application/json");
+      values.put(MediaStore.Downloads.RELATIVE_PATH,"Download/Bosch-BES2/");
+      values.put(MediaStore.Downloads.IS_PENDING,1);
+      uri=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,values);
+      if(uri==null)throw new Exception("MediaStore insert returned no URI");
+      try(OutputStream output=getContentResolver().openOutputStream(uri)){
+        if(output==null)throw new Exception("Cannot write download");
+        output.write(report.getBytes(StandardCharsets.UTF_8));
+      }
+      ContentValues published=new ContentValues();
+      published.put(MediaStore.Downloads.IS_PENDING,0);
+      getContentResolver().update(uri,published,null,null);
+      post("AUTOMATIC JSON SAVED: Downloads/Bosch-BES2/bosch-bes2-"+stamp+".json");
+      ui.post(()->resultText.append("\nReport saved in Downloads / Bosch-BES2. Review serial numbers before sharing.\n"));
+    }catch(Exception e){
+      post("Downloads export failed: "+e.getMessage()+". Private backup remains available.");
+      if(uri!=null)try{getContentResolver().delete(uri,null,null);}catch(Exception ignored){}
     }
   }
 
@@ -533,8 +575,11 @@ public final class MainActivity extends Activity {
   private String buildReport(){
     JSONObject root=new JSONObject();
     try{
-      root.put("app","Bosch BES2 USB Lab 4.4 (one-tap, experimental read-only)");
+      root.put("app","Bosch BES2 USB Lab 4.5 (one button, experimental read-only)");
       root.put("usb_vid_pid","108C:0155");
+       root.put("usb_handshake_verified_by_user",true);
+       root.put("actual_ecu_read_confirmed",false);
+       root.put("automatic_diagnostics",true);
       root.put("hardware_validated",false);root.put("heartbeat_protocol_verified",false);root.put("sliding_window_a_full_implementation_verified",false);
       root.put("note","The JSON trace may include device serial numbers. Do not publish unredacted logs.");
       synchronized(values){root.put("results",new JSONArray(values));}
