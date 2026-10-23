@@ -78,7 +78,7 @@ public final class MainActivity extends Activity {
     if(Build.VERSION.SDK_INT>=33)registerReceiver(usbReceiver,f,Context.RECEIVER_EXPORTED);
     else registerReceiver(usbReceiver,f);
     buildUI();
-    post("BES2 4.3: one-tap automated read-only diagnosis with bounded stop conditions.");
+    post("BES2 4.4: one-tap evidence collection, current BUI route and early stop.");
     post("This is not a speed-unlock tool; device-specific read responses remain unverified.");
   }
   private TextView text(String message,int size,int color){
@@ -97,13 +97,13 @@ public final class MainActivity extends Activity {
     root.setBackgroundColor(0xff0b1424);
     root.setPadding(22,18,22,38);
     scroll.addView(root);
-    TextView head=text("BOSCH BES2  •  ONE-TAP DIAGNOSTICS 4.3",22,0xff87dcff);
+    TextView head=text("BOSCH BES2  •  USB INVESTIGATION 4.4",22,0xff87dcff);
     head.setTypeface(null,Typeface.BOLD);add(root,head);
     add(root,text("Intuvia / BES2 · USB 108C:0155 · offline, read-only",14,0xffacc0d8));
     stateText=text("Connect the stationary, powered-on bike via a USB data cable.",16,0xffffc878);
     add(root,stateText);
     button(root,"▶  START AUTOMATIC DIAGNOSIS",this::oneTap);
-    add(root,text("One button connects USB (Android may ask permission), inspects HID, tests the 3 published handshake preferences and performs one documented read-only probe if Sliding Window A works. Stops on 00 FF / unknown responses.",13,0xffd3e7fb));
+    add(root,text("One button inspects USB HID, negotiates the observed 321 transport, captures 3 seconds of incoming traffic, then sends one read-only BUI query (CID 3A / DID 0220). Stops on 00 FF. No unsupported CID scans.",13,0xffd3e7fb));
     button(root,"■  STOP",()->{cancel=true;pendingAuto=false;post("Stop requested.");});
     progressText=text("Ready · no ECU readings confirmed",15,0xffc9ddf6);add(root,progressText);
     resultText=text("Automatic results will appear here.",14,0xffd5f5cd);
@@ -240,71 +240,73 @@ public final class MainActivity extends Activity {
     open(target);  // software USB-interface reopen is NOT a bicycle power cycle
     ensureNotStopped();
   }
-  /** The only automatic diagnostic run.
-   * Observes all three published negotiation preferences, always opening
-   * a new USB connection before switching. No speculative CID sweep.
-   * Exactly one published read-only ECU packet is allowed after a verified
-   * Sliding Window A negotiation; any unknown/rejected reply ends the run.
+  /**
+   * One-touch evidence collection. Source-grounded 321 handshake only:
+   * repeated preference negotiations were already measured on this bike and
+   * do not add ECU access. The 3C BMS CID is an obsolete reference target,
+   * therefore a current observed BUI target is used for the ONE bounded read.
+   * 00 FF is still an undecoded device transport error, never an ECU value.
    */
   private void automaticFlow(){
     String outcome="Incomplete";
     try{
-      post("AUTO BEGIN: HID descriptor + preferences 321, 213, 123 + one documented BMS read.");
-      post("No Bosch proprietary heartbeat implementation is known. A transport handshake is not ECU authorization.");
-      ui.post(()->{resultText.setText("");progressText.setText("Working · reading USB descriptors");});
+      post("AUTO BEGIN 4.4: USB HID descriptor -> 321 handshake -> passive capture -> one BUI read.");
+      post("Bike powered on with Intuvia installed (user confirmed). Legacy BMS CID 3C removed from auto probe.");
+      post("This does not implement proprietary Bosch heartbeat / Sliding Window A internals.");
+      ui.post(()->{resultText.setText("");progressText.setText("Working · HID descriptor");});
       ensureNotStopped();
       byte[] descriptor=new byte[512];
       int n=conn.controlTransfer(0x81,0x06,0x2200,iface.getId(),descriptor,descriptor.length,1800);
       if(n>0){
         byte[] raw=Arrays.copyOf(descriptor,n);
-        record("USB_DESCRIPTOR",raw,"AUTO HID report descriptor (not motor data)");
-        autoResult("USB HID descriptor",n+" bytes; Report IDs="+Protocol.hidReportIds(raw),Protocol.hex(raw));
-      }else autoResult("USB HID descriptor","Unavailable ("+n+"); can still test USB handshake","");
-      for(int i=0;i<Protocol.HANDSHAKE_PATTERNS.length;i++){
-        ensureNotStopped();
-        if(i!=0)reopenForAuto();
-        String preference=Protocol.HANDSHAKE_PATTERNS[i];
-        final int step=i+1;
-        ui.post(()->progressText.setText("Working · handshake "+step+"/3"));
-        byte[] reply=exchange(Protocol.handshakeVariant(i),"AUTO transport handshake "+preference);
-        String mode=Protocol.handshakeResult(reply);
-        autoResult("Handshake "+preference,mode,Protocol.hex(reply));
-        if(!Protocol.negotiatedTransport(mode))
-          throw new Exception("Unexpected/failed handshake "+preference+": "+mode+". Stop; no ECU requests.");
-      }
-      // Re-select the confirmed A-mode baseline before one read-only request.
-      reopenForAuto();
-      byte[] base=exchange(Protocol.handshake(),"AUTO restore 321 for supported A transport");
-      String mode=Protocol.handshakeResult(base);
-      autoResult("Restore 321",mode,Protocol.hex(base));
-      if(!"HANDSHAKE_SLIDING_WINDOW_A".equals(mode))
-        throw new Exception("Sliding Window A was not selected; aborting UDS request.");
-      // A short non-transmitting receive capture; no incoming unsolicited
-      // frames has been observed on the user's hardware so far.
-      ui.post(()->progressText.setText("Working · passive USB capture"));
-      for(int i=0;i<2;i++){
-        ensureNotStopped();
-        byte[] buf=new byte[Protocol.LEN];
-        int countIn=conn.bulkTransfer(in,buf,Protocol.LEN,450);
-        if(countIn>0){
-          byte[] raw=Arrays.copyOf(buf,countIn);
-          record("IN",raw,"AUTO passive receive "+(i+1));
-          autoResult("Passive receive "+(i+1),Protocol.transportSummary(raw),Protocol.hex(raw));
-        }else post("AUTO passive window "+(i+1)+": no unsolicited USB packet");
-      }
+        record("USB_DESCRIPTOR",raw,"AUTO HID report descriptor (not an ECU reply)");
+        autoResult("HID descriptor",n+" bytes; Report IDs="+Protocol.hidReportIds(raw),Protocol.hex(raw));
+      }else autoResult("HID descriptor","Unavailable ("+n+"); continue with negotiated transport","");
       ensureNotStopped();
-      ui.post(()->progressText.setText("Working · one documented read-only request"));
-      byte[] reply=exchange(Protocol.publishedBatteryRequest(),"AUTO published BMS CID 3C / DID F130 (single attempt)");
-      Protocol.Reply decoded=Protocol.parse(reply,0x22,Protocol.DOCUMENTED_BATTERY_DID);
-      autoResult("BMS 3C / DID F130",decoded.status,Protocol.hex(reply));
+      ui.post(()->progressText.setText("Working · 321 handshake"));
+      byte[] handshake=exchange(Protocol.handshake(),"AUTO single documented handshake 321");
+      String mode=Protocol.handshakeResult(handshake);
+      autoResult("Handshake 321",mode,Protocol.hex(handshake));
+      if(!"HANDSHAKE_SLIDING_WINDOW_A".equals(mode))
+        throw new Exception("321 negotiation was not Sliding Window A: "+mode+"; no ECU payload sent.");
+      post("HANDSHAKE OK: USB transport only. CAN routing and ECU diagnostic session remain UNVERIFIED.");
+
+      // Capture a longer quiet period to distinguish unsolicited input
+      // from the prior 450ms receive-timeout observation. No USB output here.
+      ui.post(()->progressText.setText("Working · 3s passive capture (no outgoing packets)"));
+      int passiveCount=0;
+      for(int i=0;i<4;i++){
+        ensureNotStopped();
+        byte[] input=new byte[Protocol.LEN];
+        long captureStart=android.os.SystemClock.elapsedRealtime();
+        int bytes=conn.bulkTransfer(in,input,Protocol.LEN,750);
+        if(bytes>0){
+          byte[] raw=Arrays.copyOf(input,bytes);
+          record("IN",raw,"AUTO unsolicited packet "+(++passiveCount));
+          autoResult("Passive receive "+(i+1),Protocol.transportSummary(raw),Protocol.hex(raw));
+        }else post("AUTO passive receive "+(i+1)+"/4: "+(bytes==-1?"no packet":"USB returned "+bytes)+
+          " after "+(android.os.SystemClock.elapsedRealtime()-captureStart)+"ms");
+      }
+      autoResult("Passive 3s",passiveCount+" unsolicited IN packets","");
+
+      ensureNotStopped();
+      ui.post(()->progressText.setText("Working · one BUI read, then stop"));
+      // This target was actually observed in the BES2 research's current CID
+      // table, unlike the legacy BMS CID 3C used in app version 4.3.
+      byte[] request=Protocol.read(Protocol.OBSERVED_BUI_CID,Protocol.OBSERVED_BUI_DID,0);
+      byte[] reply=exchange(request,"AUTO observed BUI CID 3A / DID 0220 (one attempt)");
+      Protocol.Reply decoded=Protocol.parse(reply,0x22,Protocol.OBSERVED_BUI_DID);
+      autoResult("BUI 3A / DID 0220",decoded.status,Protocol.hex(reply));
       if("TRANSPORT_00_FF_UNDECODED".equals(decoded.status)){
-        outcome="USB accepted handshake, but returned 00 FF to the documented read. Cause remains unknown; stopped.";
+        outcome="USB works; A handshake succeeds. BUI read returned 00 FF again. "+
+          "Reason not decoded: framing, route, or missing Bosch-specific session. "+
+          "Need a captured working BES2 diagnostic exchange to fix the protocol.";
         updateState(outcome,false);
       }else if("UDS_DID_MATCH_FRAME_CANDIDATE".equals(decoded.status)){
-        outcome="Received a candidate UDS reply. Its packet framing and provenance require validation.";
+        outcome="BUI raw reply candidate received; framing and ECU origin not validated.";
         updateState(outcome,false);
       }else{
-        outcome="USB replied "+decoded.status+"; no verified ECU values. Stopped.";
+        outcome="BUI reply "+decoded.status+"; no verified ECU value. Transport investigation required.";
         updateState(outcome,false);
       }
     }catch(Exception e){
@@ -312,11 +314,11 @@ public final class MainActivity extends Activity {
       updateState(outcome,false);
     }finally{
       final String result=outcome;
+      ui.post(()->progressText.setText("Finished · "+result+" · 0 verified ECU values"));
       try(FileOutputStream output=openFileOutput("bosch-bes2-last-diagnostic.json",MODE_PRIVATE)){
         output.write(buildReport().getBytes(StandardCharsets.UTF_8));
-        post("Report automatically saved inside the app: bosch-bes2-last-diagnostic.json");
-      }catch(Exception e){post("Automatic internal report save failed: "+e.getMessage());}
-      ui.post(()->progressText.setText("Finished · "+result+" · 0 verified ECU data values"));
+        post("Report saved inside app: bosch-bes2-last-diagnostic.json");
+      }catch(Exception e){post("Internal report save failed: "+e.getMessage());}
     }
   }
 
@@ -531,7 +533,7 @@ public final class MainActivity extends Activity {
   private String buildReport(){
     JSONObject root=new JSONObject();
     try{
-      root.put("app","Bosch BES2 USB Lab 4.3 (one-tap, experimental read-only)");
+      root.put("app","Bosch BES2 USB Lab 4.4 (one-tap, experimental read-only)");
       root.put("usb_vid_pid","108C:0155");
       root.put("hardware_validated",false);root.put("heartbeat_protocol_verified",false);root.put("sliding_window_a_full_implementation_verified",false);
       root.put("note","The JSON trace may include device serial numbers. Do not publish unredacted logs.");
