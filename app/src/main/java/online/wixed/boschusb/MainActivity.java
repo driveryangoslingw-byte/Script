@@ -209,6 +209,7 @@ public final class MainActivity extends Activity {
     int n=conn.bulkTransfer(in,receive,Protocol.LEN,1900);
     if(n<=0)throw new Exception("USB timeout / IN error: "+n);
     byte[] reply=Arrays.copyOf(receive,n);record("IN",reply,label);
+    post("TRANSPORT "+Protocol.transportSummary(reply)+"; UDS decoding is separate and may be unverified.");
     return reply;
   }
   private void startJob(Runnable op){
@@ -293,8 +294,8 @@ public final class MainActivity extends Activity {
           }
           tries++;
           String cidStr=String.format(Locale.US,"%02X",cid);
-          ui.post(()->progressText.setText("CID scan "+triesSnapshot(cidStr)+" of "+
-              Protocol.DISCOVERY_CIDS.length));
+          final int completed=tries;
+          ui.post(()->progressText.setText("Auto test "+completed+"/"+Protocol.DISCOVERY_CIDS.length+" · CID "+cidStr));
           // Begin a new transport session before each candidate.
           byte[] hello=exchange(Protocol.handshake(),"AUTO handshake for CID "+cidStr);
           String hs=Protocol.summary(hello,0);
@@ -354,7 +355,6 @@ public final class MainActivity extends Activity {
       }
     });
   }
-  private String triesSnapshot(String cid){return cid;}
   private void clearScreen(){
     if(busy){post("Stop diagnostics first");return;}
     synchronized(packetLog){packetLog.clear();}
