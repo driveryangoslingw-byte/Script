@@ -84,6 +84,15 @@ public final class Protocol {
     a[10]=(byte)cid;a[11]=3;a[12]=2;a[13]=0x3E;a[14]=0;
     return a;
   }
+
+  /** Transport classification is separate from any guessed UDS payload. */
+  public static String transportSummary(byte[] b) {
+    if(b==null||b.length==0)return "NO_USB_REPLY";
+    if(b.length>=2&&b[0]==0&&(b[1]&255)==255)return "TRANSPORT_ERROR_00_FF";
+    if(b.length>=3&&b[0]==0&&b[1]==1&&b[2]==2)return "HANDSHAKE_ACCEPTED_A";
+    if((b[0]&255)==2)return "HID_DATA_FRAME_UNVERIFIED";
+    return "UNKNOWN_TRANSPORT_FRAME";
+  }
   public static String testerSummary(byte[] b) {
     if(b==null||b.length==0)return "NO_RESPONSE";
     if(b.length>=2&&b[0]==0&&(b[1]&255)==255)return "TRANSPORT_REJECTED_00_FF";
