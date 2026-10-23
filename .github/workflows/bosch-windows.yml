@@ -19,18 +19,25 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Run BES2 protocol self-tests
         run: dotnet run --project windows/BoschBES2.Tests/BoschBES2.Tests.csproj --configuration Release
-      - name: Publish single Windows x64 EXE
+      - name: Run USBPcap PCAP decoder tests
+        run: dotnet run --project windows/BoschSniffer.Tests/BoschSniffer.Tests.csproj --configuration Release
+      - name: Publish both Windows x64 EXEs
         shell: pwsh
         run: |
           dotnet publish windows/BoschBES2Auto/BoschBES2Auto.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false --output windows-dist
-          if (!(Test-Path 'windows-dist/BoschBES2Auto.exe')) { throw 'Windows EXE not built' }
-          (Get-FileHash 'windows-dist/BoschBES2Auto.exe' -Algorithm SHA256).Hash | Set-Content 'windows-dist/SHA256.txt'
-      - name: Upload Windows EXE
+          dotnet publish windows/BoschUsbSniffer/BoschUsbSniffer.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false --output sniffer-dist
+          if (!(Test-Path 'windows-dist/BoschBES2Auto.exe')) { throw 'Windows diagnostic EXE not built' }
+          if (!(Test-Path 'sniffer-dist/BoschUsbSniffer.exe')) { throw 'USB sniffer EXE not built' }
+          Copy-Item sniffer-dist/BoschUsbSniffer.exe windows-dist/
+          Get-FileHash 'windows-dist/BoschBES2Auto.exe' -Algorithm SHA256 | Out-File 'windows-dist/BoschBES2Auto.sha256.txt'
+          Get-FileHash 'windows-dist/BoschUsbSniffer.exe' -Algorithm SHA256 | Out-File 'windows-dist/BoschUsbSniffer.sha256.txt'
+      - name: Upload Windows diagnostic and sniffer EXEs
         uses: actions/upload-artifact@v4
         with:
-          name: Bosch-BES2-Windows-EXE
+          name: Bosch-BES2-Windows-USBPcap-Sniffer
           path: |
             windows-dist/BoschBES2Auto.exe
-            windows-dist/SHA256.txt
+            windows-dist/BoschUsbSniffer.exe
+            windows-dist/*.sha256.txt
           retention-days: 30
           if-no-files-found: error
