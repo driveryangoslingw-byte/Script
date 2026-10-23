@@ -147,4 +147,22 @@ var odoMax = odoResponse.ToArray(); odoMax[15]=0xFF;odoMax[16]=0xFF;odoMax[17]=0
 Assert(BuiResearch.TryReadOdometer(odoMax, out metres, out kms) &&
     metres==uint.MaxValue && kms=="4294967.3",
     "unsigned big-endian metres counter decodes safely without signed overflow");
+
+var hardwareResponse = response.ToArray();
+hardwareResponse[14] = 0x21;
+hardwareResponse[15] = 0; hardwareResponse[16] = 0; hardwareResponse[17] = 2; hardwareResponse[18] = 2;
+Assert(BuiResearch.Targets.Single(t => t.Did == 0x0221).HardwareConfirmed,
+    "BUI 0221 was observed on physical device and matches Bosch DiagnosticTool report");
+Assert(BuiResearch.TryReadHardwareVersion(hardwareResponse, out string hardwareVersion) &&
+    hardwareVersion == "0.0.2.2",
+    "hardware version 00 00 02 02 decodes into 0.0.2.2");
+var hardwareWrongDid = hardwareResponse.ToArray(); hardwareWrongDid[14] = 0x20;
+Assert(!BuiResearch.TryReadHardwareVersion(hardwareWrongDid, out _),
+    "DID 0220 cannot be misinterpreted as hardware version");
+var hardwareNegative = hardwareResponse.ToArray(); hardwareNegative[12] = 0x7F;
+Assert(!BuiResearch.TryReadHardwareVersion(hardwareNegative, out _),
+    "negative UDS response does not produce hardware version");
+var hardwareShort = hardwareResponse.ToArray(); hardwareShort[10] = 6; hardwareShort[11] = 5;
+Assert(!BuiResearch.TryReadHardwareVersion(hardwareShort, out _),
+    "hardware version requires exactly four bytes");
 Console.WriteLine($"{assertions} protocol assertions PASS");
