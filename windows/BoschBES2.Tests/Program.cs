@@ -86,4 +86,42 @@ negative[13]=0x22;negative[2]=1;
 Assert(Protocol.ReadResult(negative)=="UNVERIFIED_DATA_FRAME","stale negative response remains unverified");
 negative[2]=0;negative[9]=0x39;
 Assert(Protocol.ReadResult(negative)=="UNVERIFIED_DATA_FRAME","negative reply from another CID remains unverified");
+
+Assert(BuiResearch.Targets.Count >= 5 && BuiResearch.IsAllowed(0x0220) && BuiResearch.IsAllowed(0x0221),
+    "bounded BUI research catalogue contains the verified baseline and selected read-only candidates");
+Assert(!BuiResearch.IsAllowed(0x1234) && !BuiResearch.IsAllowed(0xF130),
+    "unknown and BMS DIDs are forbidden in the BUI research workflow");
+var researchRequest = BuiResearch.BuildReadRequest(0x0221);
+Assert(researchRequest.Length == 64 && researchRequest[2] == 0 &&
+    researchRequest[8] == 0 && researchRequest[9] == 0x3A &&
+    researchRequest[12] == 0x22 && researchRequest[13] == 2 && researchRequest[14] == 0x21,
+    "research encoder preserves hardware-confirmed SWA framing, CID and UDS service");
+Assert(researchRequest.Take(13).SequenceEqual(Protocol.ReadBui().Take(13)) &&
+    researchRequest.Skip(15).SequenceEqual(Protocol.ReadBui().Skip(15)),
+    "the selected DID is the only wire byte changed from the verified request");
+var otherReply = response.ToArray(); otherReply[14] = 0x21;
+Assert(BuiResearch.TryPositiveRead(otherReply, 0x0221, out var researchRaw) &&
+    researchRaw.SequenceEqual(new byte[] {5, 9, 2, 0}),
+    "matching research DID returns only the four bytes inside the CAN record, not the trailing RAM");
+Assert(!BuiResearch.TryPositiveRead(otherReply, 0x0220, out _),
+    "research parser cannot attribute a response to another DID");
+var stale = otherReply.ToArray(); stale[2] = 1;
+Assert(!BuiResearch.TryPositiveRead(stale, 0x0221, out _),
+    "stale sequence is rejected for the first SWA frame");
+var wrongBuiCid = otherReply.ToArray(); wrongBuiCid[9] = 0x39;
+Assert(!BuiResearch.TryPositiveRead(wrongBuiCid, 0x0221, out _),
+    "unrelated response CID rejected");
+var invalidDlc = otherReply.ToArray(); invalidDlc[10] = 7;
+Assert(!BuiResearch.TryPositiveRead(invalidDlc, 0x0221, out _),
+    "CAN DLC/ISO-TP length mismatch rejected");
+var segmented = otherReply.ToArray(); segmented[11] = 0x10;
+Assert(!BuiResearch.TryPositiveRead(segmented, 0x0221, out _),
+    "unsupported segmented ISO-TP data is not accepted");
+var malformed = otherReply.ToArray(); malformed[12] = 0x7F;
+Assert(!BuiResearch.TryPositiveRead(malformed, 0x0221, out _),
+    "UDS negative response is not a positive read");
+bool rejectedUnknown = false;
+try { BuiResearch.BuildReadRequest(0xF130); } catch (ArgumentOutOfRangeException) { rejectedUnknown = true; }
+Assert(rejectedUnknown, "non-catalogued BMS request fails before any USB activity");
+
 Console.WriteLine($"{assertions} protocol assertions PASS");
