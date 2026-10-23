@@ -29,6 +29,12 @@ public final class ProtocolSelfTest {
     byte[] tester=Protocol.testerPresent(0x39,0);
     check(Protocol.hex(tester).startsWith("02 00 07 00 FF FF 0A 00 00 00 39 03 02 3E 00"),"tester candidate frame");
     check(Protocol.initial(0)[6]==7,"empty frame has no inner payload");
+    byte[] reference=Protocol.publishedBatteryRequest();
+    byte[] publishedBytes=new byte[]{2,0,7,0,(byte)255,(byte)255,11,0,0,0,0x3C,4,3,0x22,(byte)0xF1,0x30};
+    check(java.util.Arrays.equals(java.util.Arrays.copyOf(reference,16),publishedBytes),
+      "exact documented BMS request (no empty frame / TesterPresent)");
+    check(Protocol.DOCUMENTED_BATTERY_CID==0x3C&&Protocol.DOCUMENTED_BATTERY_DID==0xF130,
+      "documented reference target");
 
     byte[] pos=frame(11,0x3D,4,3,0x62);
     pos[14]=2;pos[15]=0x20;
@@ -64,6 +70,16 @@ public final class ProtocolSelfTest {
     check(session.failed(),"transport failure blocks session");
     boolean blocked=false;try{session.tester(0x3A);}catch(IllegalStateException expected){blocked=true;}
     check(blocked,"no blind retry after rejection");
+    byte[] report=new byte[]{0x05,1,0x09,2,(byte)0x85,3,0x75,8,(byte)0x95,64,(byte)0x81,2};
+    check(Protocol.hidReportIds(report).equals("0x03"),"HID report ID parsing");
+    check(Protocol.hidReportIds(new byte[]{0x09,(byte)0x85}).equals("none"),
+      "HID byte in usage data is not a Report ID");
+    check(Protocol.hidReportIds(new byte[]{(byte)0xFE,2,0,(byte)0x85,2, (byte)0x85,7})
+      .equals("0x07"),"HID long item skip");
+    check(Protocol.hidReportIds(new byte[]{(byte)0x85}).equals("none"),
+      "HID truncated item fails closed");
+    check(Protocol.hidReportIds(null).equals("none"),
+      "HID null descriptor");
     check(Protocol.DISCOVERY_CIDS.length==7,"community list remains research only");
     System.out.println(assertions+" Bosch BES2 pure-Java protocol assertions PASS");
   }
