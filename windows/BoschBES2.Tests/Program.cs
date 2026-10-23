@@ -1,0 +1,20 @@
+using BoschBES2Auto;
+void Assert(bool b,string message){if(!b)throw new Exception(message);}
+Assert(Protocol.Handshake().Length==64,"handshake length");
+Assert(Protocol.Hex(Protocol.Handshake()).StartsWith("00 00 03 03 02 01"),"321 handshake");
+var request=Protocol.ReadBui();
+Assert(Protocol.Hex(request).StartsWith("02 00 07 00 FF FF 0B 00 00 00 3A 04 03 22 02 20"),"BUI read");
+var win=Protocol.ToWindowsReport(request,65);
+Assert(win.Length==65&&win[0]==0&&win[1]==2,"Windows Report ID");
+var input=new byte[65];input[2]=1;input[3]=2;
+Assert(Protocol.HandshakeResult(Protocol.FromWindowsReport(input,65))=="HANDSHAKE_SLIDING_WINDOW_A","strip Windows Report ID");
+Assert(Protocol.HandshakeResult(new byte[]{0,1,1})=="HANDSHAKE_LEGACY","legacy");
+Assert(Protocol.HandshakeResult(new byte[]{0,1,3})=="HANDSHAKE_SLIDING_WINDOW_B","sliding B");
+var error=new byte[64];error[1]=255;
+Assert(Protocol.ReadResult(error)=="TRANSPORT_00_FF_UNDECODED","raw error");
+Assert(Protocol.ReadResult(new byte[]{0,1,2})=="UNKNOWN_FRAME_NO_ECU_DATA","no false positive");
+var response=request.ToArray();response[13]=0x62;
+Assert(Protocol.ReadResult(response)=="DID_REPLY_CANDIDATE_UNVERIFIED","framed positive");
+response[13]=0x7F;response[14]=0x22;response[15]=0x31;
+Assert(Protocol.ReadResult(response)=="UDS_NEGATIVE_CANDIDATE_0x31","framed NRC");
+Console.WriteLine("11 protocol tests PASS");
