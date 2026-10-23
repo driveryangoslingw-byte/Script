@@ -11,6 +11,7 @@ public sealed class DiagnosticOptions
 {
     public bool EnumerateOnly { get; init; }
     public int HandshakeDelayMs { get; init; } = 0;
+    public int ResearchDid { get; init; } = 0x0220; // safe single-read allowlist; 0220 is verified
     public int HandshakeTimeoutMs { get; init; } = 2500;
     public int SessionTimeoutMs { get; init; } = 3000;
     public string ReportDirectory { get; init; } = "";
@@ -53,6 +54,16 @@ public sealed record DiagnosticValue
     public string RawDataHex { get; init; } = "";
 }
 
+public sealed record BuiResearchCandidate
+{
+    public string Ecu { get; init; } = "BUI";
+    public string Cid { get; init; } = "003D";
+    public string Did { get; init; } = "";
+    public string Label { get; init; } = "";
+    public string RawDataHex { get; init; } = "";
+    public string Validation { get; init; } = "STRUCTURAL_CANDIDATE_ONLY_NOT_INTERPRETED";
+}
+
 public sealed class DiagnosticReport
 {
     public int SchemaVersion { get; init; } = 1;
@@ -62,6 +73,7 @@ public sealed class DiagnosticReport
     public double DurationMs { get; set; }
     public bool EnumerateOnly { get; init; }
     public int HandshakeDelayMs { get; init; }
+    public string ResearchDid { get; init; } = "0220";
     public string Outcome { get; set; } = "INCOMPLETE";
     public string UsbStatus { get; set; } = "NOT_ENUMERATED";
     public string HandshakeStatus { get; set; } = "NOT_SENT";
@@ -80,6 +92,7 @@ public sealed class DiagnosticReport
     public string? ReportSaveError { get; set; }
     public List<DiagnosticDeviceInfo> Devices { get; } = new();
     public List<DiagnosticValue> Values { get; } = new();
+    public List<BuiResearchCandidate> CandidateValues { get; } = new();
     public List<DiagnosticEvent> Events { get; } = new();
 }
 
@@ -101,7 +114,8 @@ public sealed class DiagnosticRunner
     {
         ArgumentNullException.ThrowIfNull(options);
         var report = new DiagnosticReport { EnumerateOnly = options.EnumerateOnly,
-            HandshakeDelayMs = options.HandshakeDelayMs };
+            HandshakeDelayMs = options.HandshakeDelayMs,
+            ResearchDid = options.ResearchDid.ToString("X4") };
         var clock = Stopwatch.StartNew();
         bool optionsValidated = false;
 
@@ -266,7 +280,7 @@ public sealed class DiagnosticRunner
             }
             Record("delay_completed", "session");
             report.SessionStatus = "READ_REQUEST_WRITE_ATTEMPTED";
-            Write(stream, Protocol.ReadBui(), "read_bui");
+            Write(stream, BuiResearch.BuildReadRequest(options.ResearchDid), "read_bui");
             report.SessionStatus = "READ_REQUEST_SENT_AWAITING_REPLIES";
             var sessionDeadline = clock.Elapsed.TotalMilliseconds + options.SessionTimeoutMs;
             int responseCount = 0;
@@ -277,7 +291,7 @@ public sealed class DiagnosticRunner
                 responseCount++;
                 if (TransportError(raw, "session")) return;
                 var classification = Protocol.ReadResult(raw);
-                if (Protocol.TryReadBuiSoftwareVersion(raw, out var version))
+                if (options.ResearchDid == 0x0220 && Protocol.TryReadBuiSoftwareVersion(raw, out var version))
                 {
                     report.Values.Add(new DiagnosticValue { Value = version,
                         RawDataHex = Protocol.Hex(raw.Skip(15).Take(4).ToArray()) });
@@ -285,6 +299,26 @@ public sealed class DiagnosticRunner
                     report.SessionStatus = "READ_RESPONSE_CONFIRMED";
                     report.EcuStatus = "BUI_READ_CONFIRMED";
                     Record("classify", "session", $"BUI_SOFTWARE_VERSION_READ; verified_ecu_values={report.VerifiedEcuValues}. No further writes.");
+                    return;
+                }
+                // For other catalogued BUI DIDs only the transport/CAN/UDS envelope
+                // is checked. Do not interpret bytes or count a verified ECU value
+                // until semantics are independently validated on this device.
+                if (options.ResearchDid != 0x0220 &&
+                    BuiResearch.TryPositiveRead(raw, options.ResearchDid, out var candidate))
+                {
+                    report.CandidateValues.Add(new BuiResearchCandidate {
+                        Did = options.ResearchDid.ToString("X4"),
+                        Label = BuiResearch.Name(options.ResearchDid),
+                        RawDataHex = Protocol.Hex(candidate)
+                    });
+                    report.UnverifiedCandidateFrames++;
+                    report.Outcome = "BUI_READ_CANDIDATE_UNVERIFIED";
+                    report.SessionStatus = "DID_MATCH_FRAME_CANDIDATE";
+                    report.EcuStatus = "BUI_PAYLOAD_SEMANTICS_UNVERIFIED";
+                    Record("classify", "session",
+                        $"BUI DID {options.ResearchDid:X4} response candidate: {Protocol.Hex(candidate)}. " +
+                        "Single frame matches request, value meaning unverified. No further writes.");
                     return;
                 }
                 if (classification.StartsWith("UDS_NEGATIVE_0x", StringComparison.Ordinal))
@@ -306,6 +340,8 @@ public sealed class DiagnosticRunner
         {
             if (string.IsNullOrWhiteSpace(options.ReportDirectory)) throw new ArgumentException("ReportDirectory must be explicit.");
             if (options.HandshakeDelayMs is < 0 or > 3000) throw new ArgumentOutOfRangeException(nameof(options.HandshakeDelayMs), "Expected 0..3000 ms.");
+            if (!BuiResearch.IsAllowed(options.ResearchDid))
+                throw new ArgumentOutOfRangeException(nameof(options.ResearchDid), "DID is not in the bounded read-only BUI catalogue.");
             if (options.HandshakeTimeoutMs is < 1 or > 30000) throw new ArgumentOutOfRangeException(nameof(options.HandshakeTimeoutMs));
             if (options.SessionTimeoutMs is < 1 or > 30000) throw new ArgumentOutOfRangeException(nameof(options.SessionTimeoutMs));
             optionsValidated = true;
