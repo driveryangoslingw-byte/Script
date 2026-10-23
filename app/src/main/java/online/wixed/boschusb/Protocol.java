@@ -78,8 +78,9 @@ public final class Protocol {
     if(u(b[2])!=7||u(b[4])!=255||u(b[5])!=255)
       return new Reply("HMI_HEADER_NOT_VALIDATED",-1,-1,-1,-1);
     int declared=u(b[6]);
-    if(declared<11||declared>LEN-7||7+declared>b.length)
+    if(declared<7||declared>LEN-7||7+declared>b.length)
       return new Reply("HMI_LENGTH_INVALID",-1,-1,-1,-1);
+    if(declared==7)return new Reply("HMI_EMPTY_PACKET_UNVERIFIED",-1,u(b[1]),-1,-1);
     int cid=u(b[10]),messageLength=u(b[11]),isotpLength=u(b[12]);
     if(messageLength<2||messageLength>declared-7||isotpLength!=messageLength-1)
       return new Reply("ISO_TP_LENGTH_UNVERIFIED",-1,-1,-1,-1);
