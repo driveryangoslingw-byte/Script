@@ -1,0 +1,12 @@
+App(
+    appid="ble_hid_lab",
+    name="BLE HID Lab",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="ble_hid_lab_app",
+    requires=["gui"],
+    stack_size=2048,
+    fap_version="1.0",
+    fap_category="Bluetooth",
+    fap_description="Connectable BLE HID test; one authorized pairing, time-limited",
+    fap_libs=["ble_profile"],
+)

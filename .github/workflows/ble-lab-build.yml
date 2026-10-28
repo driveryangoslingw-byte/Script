@@ -34,3 +34,12 @@ jobs:
           name: BLE-Lab-Unleashed-094-FAP
           path: ble-lab-beacon/dist/**/*.fap
           if-no-files-found: error
+      - name: Build connectable BLE HID Lab
+        working-directory: ble-hid-lab
+        run: ufbt
+      - name: Upload connectable BLE HID Lab
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLE-HID-Lab-Unleashed-094-FAP
+          path: ble-hid-lab/dist/**/*.fap
+          if-no-files-found: error
