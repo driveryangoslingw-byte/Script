@@ -30,9 +30,15 @@ jobs:
           ./fbt fap_ble_identity_lab
           find build -type f -name 'ble_identity_lab.fap' -print
 
+      - name: Stage compiled FAP outside hidden directories
+        run: |
+          mkdir -p dist
+          cp unleashed-firmware/build/*/.extapps/ble_identity_lab.fap dist/
+          ls -lah dist
+
       - name: Upload compiled FAP
         uses: actions/upload-artifact@v4
         with:
           name: ble-identity-lab-unleashed-094
-          path: unleashed-firmware/build/**/ble_identity_lab.fap
+          path: dist/ble_identity_lab.fap
           if-no-files-found: error
