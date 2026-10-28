@@ -1,0 +1,36 @@
+name: Build Flipper BLE Lab (Unleashed 094)
+on:
+  push:
+    branches: [ble-lab-build-unleashed-094]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ble-lab-beacon
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install uFBT
+        run: python -m pip install --upgrade ufbt
+      - name: Install pinned Unleashed 094 SDK
+        run: ufbt update --url=https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-094/flipper-z-f7-sdk-unlshd-094.zip
+      - name: Build FAP
+        run: ufbt
+      - name: List build output
+        run: find dist -type f -name '*.fap' -print
+      - name: Upload Flipper app
+        uses: actions/upload-artifact@v4
+        with:
+          name: BLE-Lab-Unleashed-094-FAP
+          path: ble-lab-beacon/dist/**/*.fap
+          if-no-files-found: error
