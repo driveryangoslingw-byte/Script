@@ -23,7 +23,7 @@ jobs:
       - name: Install uFBT
         run: python -m pip install --upgrade ufbt
       - name: Install pinned Unleashed 094 SDK
-        run: ufbt update --url=https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-094/flipper-z-f7-sdk-unlshd-094.zip
+        run: ufbt update --hw-target=f7 --url=https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-094/flipper-z-f7-sdk-unlshd-094.zip
       - name: Build FAP
         run: ufbt
       - name: List build output
