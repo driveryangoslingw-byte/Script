@@ -1,0 +1,38 @@
+name: Build BLE Identity Lab for Unleashed 094
+
+on:
+  push:
+    branches:
+      - ble-identity-lab-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Download matching Unleashed firmware
+        run: |
+          git clone --depth 1 --branch unlshd-094 https://github.com/DarkFlippers/unleashed-firmware.git unleashed-firmware
+          mkdir -p unleashed-firmware/applications_user/ble_identity_lab
+          tar -xzf ble_lab_sources.tar.gz -C unleashed-firmware/applications_user/ble_identity_lab
+          test -f unleashed-firmware/applications_user/ble_identity_lab/application.fam
+
+      - name: Build Flipper Zero FAP
+        working-directory: unleashed-firmware
+        run: |
+          ./fbt fap_ble_identity_lab
+          find build -type f -name 'ble_identity_lab.fap' -print
+
+      - name: Upload compiled FAP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ble-identity-lab-unleashed-094
+          path: unleashed-firmware/build/**/ble_identity_lab.fap
+          if-no-files-found: error
