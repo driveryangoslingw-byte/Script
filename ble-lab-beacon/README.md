@@ -1,7 +1,23 @@
-# BLE Lab Beacon for Flipper Zero — Unleashed 094
-Source for a time-limited, low-power, non-connectable BLE advertising compatibility test.
-Controls: OK start/stop; UP select 1000/500/200ms; LEFT burst/steady; RIGHT payload; BACK exit.
-Automatically stops after 60 seconds. Does not pair or send HID commands.
-Runs 2-second burst windows with 2-second gaps in Burst mode.
-Build: install uFBT and run `ufbt update --url=https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-094/flipper-z-f7-sdk-unlshd-094.zip` then `ufbt`.
-The GitHub Actions workflow uploads a compiled .fap artifact on successful builds.
+# BLE Lab Multi — Unleashed 094
+
+Purpose: measure BLE scanner discovery and deduplication using **four clearly labeled,
+non-connectable test identities**. This does not forge manufacturer pairing payloads,
+trigger Apple pop-ups, pair to phones or jam nearby Bluetooth traffic.
+
+- Runs at most **60 seconds**. Press OK to stop earlier; BACK quits and stops TX.
+- The **single extra beacon radio** alternates 4 identities (`FZLAB-01` ...
+  `FZLAB-04`) every 5 seconds with four distinct locally derived random addresses.
+  The identities are **not** transmitted simultaneously.
+- Advertising interval defaults to 100ms; UP cycles 500/200/100ms.
+- Nominal 0 dBm RF power using Unleashed extra beacon API.
+- LEFT toggles steady versus 2s on / 2s off burst.
+- RIGHT compares one identity vs four identities; only while stopped.
+- Restores earlier extra-beacon configuration and payload on exit when possible.
+
+**On iPhone:** use an actual BLE scanner, e.g. nRF Connect. Normal iOS
+Settings > Bluetooth may not list these non-connectable beacons. Scanner
+OS behavior varies and entries may be deduplicated.
+
+Build is provided via GitHub Actions against the `unlshd-094` SDK.
+Compilation does not establish real-device compatibility. Verify that your
+Flipper is running the corresponding SDK-compatible firmware.

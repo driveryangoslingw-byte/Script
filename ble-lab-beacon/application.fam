@@ -1,11 +1,11 @@
 App(
     appid="ble_lab_beacon",
-    name="BLE Lab Beacon",
+    name="BLE Lab Multi",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="ble_lab_app",
     requires=["gui"],
     stack_size=2048,
-    fap_version="1.0",
+    fap_version="1.1",
     fap_category="Bluetooth",
-    fap_description="Time-limited low-power BLE advertising compatibility test",
+    fap_description="60-second four-identity BLE scanner compatibility test",
 )
